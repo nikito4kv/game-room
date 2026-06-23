@@ -11,7 +11,7 @@ import {
   useParticipants,
   useTrackToggle,
 } from "@livekit/components-react";
-import { ConnectionState, Participant, Track } from "livekit-client";
+import { ConnectionState, MediaDeviceFailure, Participant, Track } from "livekit-client";
 import {
   clearPassword,
   getHostKey,
@@ -138,9 +138,13 @@ export default function RoomClient({ code }: { code: string }) {
       // Этап 2: микрофон публикуем при входе (живой). Камеру — нет.
       audio={true}
       video={false}
-      onError={(e) => setError(e.message)}
-      // Отказ в доступе к микрофону не должен выкидывать из комнаты —
-      // остаёмся слушателем, показываем баннер.
+      // Ошибки устройств (нет доступа к микрофону) НЕ роняем на экран ошибки:
+      // их ловит onMediaDeviceFailure и оставляет нас слушателем. Иначе при
+      // отказе микрофона onError перекрыл бы баннер полноэкранной ошибкой.
+      onError={(e) => {
+        if (MediaDeviceFailure.getFailure(e)) return;
+        setError(e.message);
+      }}
       onMediaDeviceFailure={() => setMicDenied(true)}
       className="flex flex-1 flex-col"
     >
@@ -251,13 +255,13 @@ function RoomView({
           disabled={mic.pending}
           className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
         >
-          {mic.enabled ? "🎙 Микрофон вкл" : "🔇 Микрофон выкл"}
+          {mic.enabled ? "🎙 Выключить микрофон" : "🔇 Включить микрофон"}
         </button>
         <button
           onClick={onToggleDeafen}
           className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
         >
-          {deafened ? "🔈 Звук выкл (всех)" : "🔊 Звук вкл"}
+          {deafened ? "🔊 Включить звук" : "🔈 Заглушить всех"}
         </button>
       </section>
 
