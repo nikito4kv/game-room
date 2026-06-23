@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.21",
+    "@vercel/blob": "^2.4.1",
     "livekit-client": "^2.19.2",
     "livekit-server-sdk": "^2.15.5",
     "next": "16.2.9",

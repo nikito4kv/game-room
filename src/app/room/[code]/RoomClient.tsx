@@ -22,6 +22,8 @@ import {
   setNickname as saveNickname,
   takePassword,
 } from "@/lib/clientStorage";
+import TacticsBoard from "./TacticsBoard";
+import Banner from "@/components/Banner";
 
 type JoinInfo = { token: string; serverUrl: string; title: string; isHost: boolean };
 
@@ -112,9 +114,7 @@ export default function RoomClient({ code }: { code: string }) {
   if (error) {
     return (
       <CenteredCard title={`Комната ${code}`}>
-        <p className="rounded-md bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-          {error}
-        </p>
+        <Banner tone="error">{error}</Banner>
         <button
           onClick={() => router.push("/")}
           className="rounded-md border border-zinc-300 px-4 py-2 dark:border-zinc-700"
@@ -209,6 +209,10 @@ function RoomView({
   });
   // Все активные демонстрации экрана в комнате (свои и чужие).
   const screens = useTracks([Track.Source.ScreenShare]);
+  // Что показываем в центре: демонстрацию экрана или доску. Оба блока остаются
+  // смонтированными (неактивный прячем через CSS) — доска при этом продолжает
+  // принимать чужие рисунки в фоне и не теряет накопленное.
+  const [stage, setStage] = useState<"screen" | "board">("screen");
   // Запоминаем факт успешного подключения, чтобы отличить «потеряли связь» от
   // обычного начального состояния и от пересоздания компонента в dev (StrictMode).
   const [everConnected, setEverConnected] = useState(false);
@@ -252,23 +256,21 @@ function RoomView({
       </header>
 
       {state === ConnectionState.Reconnecting && (
-        <p className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-          Связь прервалась, переподключаемся…
-        </p>
+        <Banner tone="warn">Связь прервалась, переподключаемся…</Banner>
       )}
 
       {micDenied && (
-        <p className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+        <Banner tone="warn">
           Нет доступа к микрофону — вас не слышно. Разрешите доступ в адресной
           строке браузера и нажмите «Включить микрофон».
-        </p>
+        </Banner>
       )}
 
       {screenError && (
-        <p className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+        <Banner tone="warn">
           Демонстрация экрана не запустилась. Возможно, вы закрыли окно выбора —
           нажмите «Показать экран» ещё раз.
-        </p>
+        </Banner>
       )}
 
       <section className="flex flex-wrap gap-2">
@@ -297,7 +299,22 @@ function RoomView({
         </button>
       </section>
 
-      <ScreenShareStage screens={screens} />
+      <div className="flex gap-2">
+        <StageTab active={stage === "screen"} onClick={() => setStage("screen")}>
+          🖥 Экран
+        </StageTab>
+        <StageTab active={stage === "board"} onClick={() => setStage("board")}>
+          ✏️ Доска
+        </StageTab>
+      </div>
+
+      {/* Оба блока смонтированы; неактивный скрыт через hidden. */}
+      <div className={stage === "screen" ? "" : "hidden"}>
+        <ScreenShareStage screens={screens} />
+      </div>
+      <div className={stage === "board" ? "" : "hidden"}>
+        <TacticsBoard code={code} active={stage === "board"} />
+      </div>
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-zinc-500">
@@ -373,6 +390,31 @@ function ScreenShareStage({ screens }: { screens: TrackReference[] }) {
         </div>
       )}
     </section>
+  );
+}
+
+/** Вкладка переключателя «Экран / Доска» над центральной областью. */
+function StageTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        "rounded-md border px-4 py-1.5 text-sm font-medium transition-colors " +
+        (active
+          ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+          : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800")
+      }
+    >
+      {children}
+    </button>
   );
 }
 

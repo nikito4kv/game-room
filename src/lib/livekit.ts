@@ -2,7 +2,7 @@
 // Секреты LiveKit не должны попадать в клиентские компоненты.
 import { randomInt, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient, WebhookReceiver } from "livekit-server-sdk";
 
 /**
  * Серверные хелперы для работы с LiveKit.
@@ -58,6 +58,19 @@ export function getRoomService(): RoomServiceClient {
     );
   }
   return _roomService;
+}
+
+let _webhookReceiver: WebhookReceiver | null = null;
+
+/** Ленивый приёмник вебхуков LiveKit (проверяет подпись теми же ключами). */
+export function getWebhookReceiver(): WebhookReceiver {
+  if (!_webhookReceiver) {
+    _webhookReceiver = new WebhookReceiver(
+      requireEnv("LIVEKIT_API_KEY"),
+      requireEnv("LIVEKIT_API_SECRET"),
+    );
+  }
+  return _webhookReceiver;
 }
 
 // Алфавит без похожих символов (нет 0/O, 1/I/L) — код проще диктовать друзьям.

@@ -5,6 +5,8 @@
 const NICK_KEY = "gr.nickname";
 const pwKey = (code: string) => `gr.pw.${code}`;
 const hostKeyKey = (code: string) => `gr.host.${code}`;
+const BOARD_COLOR_KEY = "gr.board.color";
+const BOARD_SIZE_KEY = "gr.board.size";
 
 /** Ник пользователя — переживает перезагрузку (localStorage). */
 export function getNickname(): string | null {
@@ -37,4 +39,23 @@ export function stashHostKey(code: string, key: string): void {
 }
 export function getHostKey(code: string): string | undefined {
   return localStorage.getItem(hostKeyKey(code)) ?? undefined;
+}
+
+/**
+ * Настройки кисти доски (цвет и толщина в «логических» px). Переживают
+ * перезагрузку, чтобы не выбирать заново каждый вход. Толщину храним числом.
+ */
+export function getBoardColor(): string | null {
+  return localStorage.getItem(BOARD_COLOR_KEY);
+}
+export function setBoardColor(color: string): void {
+  localStorage.setItem(BOARD_COLOR_KEY, color);
+}
+export function getBoardSize(): number | null {
+  const raw = localStorage.getItem(BOARD_SIZE_KEY);
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+export function setBoardSize(size: number): void {
+  localStorage.setItem(BOARD_SIZE_KEY, String(size));
 }
