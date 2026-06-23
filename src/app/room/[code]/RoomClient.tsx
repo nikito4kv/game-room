@@ -9,7 +9,10 @@ import {
   useConnectionState,
   useIsSpeaking,
   useParticipants,
+  useTracks,
   useTrackToggle,
+  VideoTrack,
+  type TrackReference,
 } from "@livekit/components-react";
 import { ConnectionState, MediaDeviceFailure, Participant, Track } from "livekit-client";
 import {
@@ -194,6 +197,18 @@ function RoomView({
   useEffect(() => {
     if (mic.enabled) onMicOk();
   }, [mic.enabled, onMicOk]);
+  // Кнопка демонстрации экрана. Звук вкладки/системы захватываем вместе с
+  // картинкой (audio: true) — браузер сам покажет галочку «поделиться звуком».
+  const [screenError, setScreenError] = useState(false);
+  const screen = useTrackToggle({
+    source: Track.Source.ScreenShare,
+    captureOptions: { audio: true },
+    // Отмена в системном окне выбора экрана прилетает сюда — не роняем комнату,
+    // показываем мягкий баннер (как с микрофоном).
+    onDeviceError: () => setScreenError(true),
+  });
+  // Все активные демонстрации экрана в комнате (свои и чужие).
+  const screens = useTracks([Track.Source.ScreenShare]);
   // Запоминаем факт успешного подключения, чтобы отличить «потеряли связь» от
   // обычного начального состояния и от пересоздания компонента в dev (StrictMode).
   const [everConnected, setEverConnected] = useState(false);
@@ -220,7 +235,7 @@ function RoomView({
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-10">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>
@@ -249,6 +264,13 @@ function RoomView({
         </p>
       )}
 
+      {screenError && (
+        <p className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+          Демонстрация экрана не запустилась. Возможно, вы закрыли окно выбора —
+          нажмите «Показать экран» ещё раз.
+        </p>
+      )}
+
       <section className="flex flex-wrap gap-2">
         <button
           onClick={() => void mic.toggle()}
@@ -263,7 +285,19 @@ function RoomView({
         >
           {deafened ? "🔊 Включить звук" : "🔈 Заглушить всех"}
         </button>
+        <button
+          onClick={() => {
+            setScreenError(false);
+            void screen.toggle();
+          }}
+          disabled={screen.pending}
+          className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          {screen.enabled ? "⏹ Остановить показ" : "🖥 Показать экран"}
+        </button>
       </section>
+
+      <ScreenShareStage screens={screens} />
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-zinc-500">
@@ -276,6 +310,69 @@ function RoomView({
         </ul>
       </section>
     </main>
+  );
+}
+
+/**
+ * Область демонстрации экрана: выбранный поток крупно («spotlight»), а если
+ * показывают несколько — полоса превью снизу, клик по превью разворачивает.
+ * Своя демонстрация тоже попадает сюда — это подтверждение, что показ идёт.
+ */
+function ScreenShareStage({ screens }: { screens: TrackReference[] }) {
+  // Какой поток развёрнут крупно. Это лишь предпочтение: если выбранного потока
+  // уже нет в списке, фокус «падает» на последний появившийся (см. ниже) —
+  // отдельная синхронизация состояния не нужна.
+  const [focusedSid, setFocusedSid] = useState<string | null>(null);
+
+  if (screens.length === 0) {
+    return (
+      <section className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-700">
+        Никто не показывает экран
+      </section>
+    );
+  }
+
+  const focused =
+    screens.find((s) => s.publication.trackSid === focusedSid) ??
+    screens[screens.length - 1];
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="relative overflow-hidden rounded-lg border border-zinc-200 bg-black dark:border-zinc-800">
+        <VideoTrack trackRef={focused} className="aspect-video w-full object-contain" />
+        <span className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">
+          <ParticipantName participant={focused.participant} />
+          {focused.participant.isLocal && " (вы)"}
+        </span>
+      </div>
+
+      {screens.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {screens.map((s) => {
+            const sid = s.publication.trackSid;
+            const active = sid === focused.publication.trackSid;
+            return (
+              <button
+                key={sid}
+                onClick={() => setFocusedSid(sid)}
+                className={
+                  "relative w-40 overflow-hidden rounded-md border bg-black transition-colors " +
+                  (active
+                    ? "border-emerald-500 ring-1 ring-emerald-500"
+                    : "border-zinc-200 hover:border-zinc-400 dark:border-zinc-800")
+                }
+              >
+                <VideoTrack trackRef={s} className="aspect-video w-full object-contain" />
+                <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                  <ParticipantName participant={s.participant} />
+                  {s.participant.isLocal && " (вы)"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
