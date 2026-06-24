@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { TrackSource } from "livekit-server-sdk";
 import {
   getRoomService,
-  loadRoomMeta,
-  saveRoomMeta,
-  verifyPassword,
-  verifyTokenIdentity,
-  type RoomMeta,
+  loadPublicMeta,
+  savePublicMeta,
+  verifyHostCredentials,
+  type RoomPublicMeta,
 } from "@/lib/livekit";
+import { loadSecret, saveSecret, type RoomSecret } from "@/lib/roomSecret";
+import { clientIp, moderateLimit, rateLimited } from "@/lib/ratelimit";
 
 // Единая точка модерации хоста (Этап 5): кик/бан/мьют/передача прав/замок.
 // Все действия идут через сервер с секретными ключами LiveKit — клиент сам
@@ -43,6 +44,9 @@ type ModerateBody = {
 };
 
 export async function POST(request: Request) {
+  const limited = await rateLimited(moderateLimit(), clientIp(request));
+  if (limited) return limited;
+
   let body: ModerateBody;
   try {
     body = await request.json();
@@ -66,28 +70,24 @@ export async function POST(request: Request) {
 
   const service = getRoomService();
 
-  let meta: RoomMeta | null;
+  let meta: RoomPublicMeta | null;
+  let secret: RoomSecret | null;
   try {
-    meta = await loadRoomMeta(code);
+    [meta, secret] = await Promise.all([loadPublicMeta(code), loadSecret(code)]);
   } catch (err) {
-    console.error("loadRoomMeta failed", err);
+    console.error("load room state failed", err);
     return NextResponse.json({ error: "Сервис недоступен" }, { status: 502 });
   }
-  if (!meta) {
+  if (!meta || !secret) {
     return NextResponse.json({ error: "Комната не найдена" }, { status: 404 });
   }
 
   // Авторизация: либо мастер-ключ создателя, либо токен текущего хоста.
-  const byHostKey = Boolean(
-    body.hostKey &&
-      meta.hostKeyHash &&
-      (await verifyPassword(body.hostKey.trim(), meta.hostKeyHash)),
-  );
-  let callerIdentity: string | null = null;
-  if (!byHostKey && body.callerToken) {
-    callerIdentity = await verifyTokenIdentity(body.callerToken, code);
-  }
-  const isHost = byHostKey || (callerIdentity !== null && callerIdentity === meta.hostIdentity);
+  const { isHost, callerIdentity } = await verifyHostCredentials(meta, secret, {
+    hostKey: body.hostKey,
+    callerToken: body.callerToken,
+    code,
+  });
 
   // Авто-передача прав: когда хост вышел, оставшийся участник может «занять»
   // вакантное место хоста — но только для СЕБЯ и только если текущего хоста
@@ -99,7 +99,7 @@ export async function POST(request: Request) {
       const callerPresent = parts.some((x) => x.identity === callerIdentity);
       if (!hostPresent && callerPresent) {
         meta.hostIdentity = callerIdentity;
-        await saveRoomMeta(code, meta);
+        await savePublicMeta(code, meta);
         return NextResponse.json({ ok: true });
       }
     }
@@ -125,22 +125,29 @@ export async function POST(request: Request) {
         break;
       }
       case "ban": {
-        const banned = new Set(meta.banned ?? []);
+        const banned = new Set(secret.banned);
         banned.add(target!);
-        meta.banned = [...banned];
-        await saveRoomMeta(code, meta);
+        secret.banned = [...banned];
+        await saveSecret(code, secret);
         // Удаляем уже зашедшего; если его нет — не страшно.
         await service.removeParticipant(code, target!).catch(() => {});
         break;
       }
       case "unban": {
-        meta.banned = (meta.banned ?? []).filter((n) => n !== target);
-        await saveRoomMeta(code, meta);
+        secret.banned = secret.banned.filter((n) => n !== target);
+        await saveSecret(code, secret);
         break;
       }
       case "mute":
       case "unmute": {
         const canPublish = action === "unmute";
+        // Состояние мьюта храним в секрете комнаты, чтобы оно пережило
+        // переподключение участника (иначе перезагрузка снимала бы мьют).
+        const mutedSet = new Set(secret.mutedIdentities);
+        if (canPublish) mutedSet.delete(target!);
+        else mutedSet.add(target!);
+        secret.mutedIdentities = [...mutedSet];
+        await saveSecret(code, secret);
         // Сохраняем флаг в metadata участника, чтобы все клиенты показали
         // «заглушён хостом». Мержим с существующими метаданными участника.
         const parts = await service.listParticipants(code);
@@ -188,13 +195,13 @@ export async function POST(request: Request) {
           );
         }
         meta.hostIdentity = target!;
-        await saveRoomMeta(code, meta);
+        await savePublicMeta(code, meta);
         break;
       }
       case "lock":
       case "unlock": {
         meta.locked = action === "lock";
-        await saveRoomMeta(code, meta);
+        await savePublicMeta(code, meta);
         break;
       }
       default: {

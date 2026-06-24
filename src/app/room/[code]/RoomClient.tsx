@@ -618,7 +618,7 @@ function RoomView({
         <ScreenShareStage screens={screens} />
       </div>
       <div className={stage === "board" ? "" : "hidden"}>
-        <TacticsBoard code={code} active={stage === "board"} />
+        <TacticsBoard code={code} active={stage === "board"} token={token} amHost={amHost} />
       </div>
 
       <section className="flex flex-col gap-2">

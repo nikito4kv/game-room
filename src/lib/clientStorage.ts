@@ -15,12 +15,44 @@ const AUDIO_MASTER_VOLUME_KEY = "gr.audio.masterVolume";
 const AUDIO_VOLUMES_KEY = "gr.audio.volumes";
 const AUDIO_MUTES_KEY = "gr.audio.mutes";
 
+/**
+ * Безопасный доступ к Web Storage. В некоторых браузерах (Safari «блокировать
+ * все cookie», Firefox с отключённым dom.storage, жёсткие корп-политики) сам
+ * вызов getItem/setItem бросает SecurityError. Эти исключения, прилетая из
+ * useEffect без error boundary, роняли бы всё дерево в белый экран — поэтому
+ * ВЕСЬ доступ к storage идёт только через эти хелперы, которые гасят сбой.
+ */
+function safeGet(storage: () => Storage, key: string): string | null {
+  try {
+    return storage().getItem(key);
+  } catch {
+    return null;
+  }
+}
+function safeSet(storage: () => Storage, key: string, value: string): void {
+  try {
+    storage().setItem(key, value);
+  } catch {
+    // приватный режим / переполнение / заблокированное хранилище — просто не сохраняем
+  }
+}
+function safeRemove(storage: () => Storage, key: string): void {
+  try {
+    storage().removeItem(key);
+  } catch {
+    // хранилище недоступно — нечего и удалять
+  }
+}
+
+const local = () => localStorage;
+const session = () => sessionStorage;
+
 /** Ник пользователя — переживает перезагрузку (localStorage). */
 export function getNickname(): string | null {
-  return localStorage.getItem(NICK_KEY);
+  return safeGet(local, NICK_KEY);
 }
 export function setNickname(nick: string): void {
-  localStorage.setItem(NICK_KEY, nick);
+  safeSet(local, NICK_KEY, nick);
 }
 
 /**
@@ -28,13 +60,13 @@ export function setNickname(nick: string): void {
  * чтобы не светить его в URL. Живёт до момента входа, потом стирается.
  */
 export function stashPassword(code: string, password: string): void {
-  if (password) sessionStorage.setItem(pwKey(code), password);
+  if (password) safeSet(session, pwKey(code), password);
 }
 export function takePassword(code: string): string | undefined {
-  return sessionStorage.getItem(pwKey(code)) ?? undefined;
+  return safeGet(session, pwKey(code)) ?? undefined;
 }
 export function clearPassword(code: string): void {
-  sessionStorage.removeItem(pwKey(code));
+  safeRemove(session, pwKey(code));
 }
 
 /**
@@ -42,10 +74,10 @@ export function clearPassword(code: string): void {
  * Лежит в localStorage, чтобы хост мог вернуться после перезагрузки.
  */
 export function stashHostKey(code: string, key: string): void {
-  localStorage.setItem(hostKeyKey(code), key);
+  safeSet(local, hostKeyKey(code), key);
 }
 export function getHostKey(code: string): string | undefined {
-  return localStorage.getItem(hostKeyKey(code)) ?? undefined;
+  return safeGet(local, hostKeyKey(code)) ?? undefined;
 }
 
 /**
@@ -53,18 +85,18 @@ export function getHostKey(code: string): string | undefined {
  * перезагрузку, чтобы не выбирать заново каждый вход. Толщину храним числом.
  */
 export function getBoardColor(): string | null {
-  return localStorage.getItem(BOARD_COLOR_KEY);
+  return safeGet(local, BOARD_COLOR_KEY);
 }
 export function setBoardColor(color: string): void {
-  localStorage.setItem(BOARD_COLOR_KEY, color);
+  safeSet(local, BOARD_COLOR_KEY, color);
 }
 export function getBoardSize(): number | null {
-  const raw = localStorage.getItem(BOARD_SIZE_KEY);
+  const raw = safeGet(local, BOARD_SIZE_KEY);
   const n = raw ? Number(raw) : NaN;
   return Number.isFinite(n) ? n : null;
 }
 export function setBoardSize(size: number): void {
-  localStorage.setItem(BOARD_SIZE_KEY, String(size));
+  safeSet(local, BOARD_SIZE_KEY, String(size));
 }
 
 /**
@@ -73,30 +105,18 @@ export function setBoardSize(size: number): void {
  */
 
 function readNumber(key: string, fallback: number): number {
-  try {
-    const raw = localStorage.getItem(key);
-    const n = raw !== null ? Number(raw) : NaN;
-    return Number.isFinite(n) ? n : fallback;
-  } catch {
-    return fallback;
-  }
+  const raw = safeGet(local, key);
+  const n = raw !== null ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function writeString(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // приватный режим / переполнение — настройка просто не сохранится
-  }
+  safeSet(local, key, value);
 }
 
 /** Выбранный микрофон (deviceId). Пусто — системный по умолчанию. */
 export function getInputDevice(): string | null {
-  try {
-    return localStorage.getItem(AUDIO_INPUT_DEVICE_KEY);
-  } catch {
-    return null;
-  }
+  return safeGet(local, AUDIO_INPUT_DEVICE_KEY);
 }
 export function setInputDevice(id: string): void {
   writeString(AUDIO_INPUT_DEVICE_KEY, id);
@@ -104,11 +124,7 @@ export function setInputDevice(id: string): void {
 
 /** Выбранное устройство вывода (deviceId). Пусто — системное по умолчанию. */
 export function getOutputDevice(): string | null {
-  try {
-    return localStorage.getItem(AUDIO_OUTPUT_DEVICE_KEY);
-  } catch {
-    return null;
-  }
+  return safeGet(local, AUDIO_OUTPUT_DEVICE_KEY);
 }
 export function setOutputDevice(id: string): void {
   writeString(AUDIO_OUTPUT_DEVICE_KEY, id);
@@ -131,9 +147,9 @@ export function setMasterVolume(value: number): void {
 }
 
 function readMap<T>(key: string): Record<string, T> {
+  const raw = safeGet(local, key);
+  if (!raw) return {};
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as Record<string, T>) : {};
   } catch {

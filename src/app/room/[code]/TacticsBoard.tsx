@@ -22,6 +22,7 @@ import {
 import {
   getBoardColor,
   getBoardSize,
+  getHostKey,
   setBoardColor as saveBoardColor,
   setBoardSize as saveBoardSize,
 } from "@/lib/clientStorage";
@@ -46,8 +47,21 @@ const clampSize = (n: number) => Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.roun
  * и смена фона синхронизируются всем через data-канал LiveKit (топик "board").
  * Компонент всегда смонтирован (родитель прячет его через CSS), чтобы доска
  * продолжала принимать чужие рисунки, пока смотришь демонстрацию экрана.
+ *
+ * Рисовать может каждый; менять фон-карту — только хост (загрузка авторизуется
+ * на сервере, см. /api/upload), поэтому контролы фона показываем лишь хосту.
  */
-export default function TacticsBoard({ code, active }: { code: string; active: boolean }) {
+export default function TacticsBoard({
+  code,
+  active,
+  token,
+  amHost,
+}: {
+  code: string;
+  active: boolean;
+  token: string;
+  amHost: boolean;
+}) {
   const { localParticipant } = useLocalParticipant();
   const connState = useConnectionState();
 
@@ -533,6 +547,10 @@ export default function TacticsBoard({ code, active }: { code: string; active: b
       const form = new FormData();
       form.append("file", file);
       form.append("code", code);
+      // Авторизация хоста (как в /api/moderate): токен текущего хоста + ключ.
+      form.append("callerToken", token);
+      const hostKey = getHostKey(code);
+      if (hostKey) form.append("hostKey", hostKey);
       const res = await fetch("/api/upload", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) {
@@ -603,39 +621,42 @@ export default function TacticsBoard({ code, active }: { code: string; active: b
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="cursor-pointer rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
-          {uploading ? "Загрузка…" : "🗺 Загрузить карту"}
+      {/* Смена фон-карты — только хост (загрузка авторизуется на сервере). */}
+      {amHost && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="cursor-pointer rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
+            {uploading ? "Загрузка…" : "🗺 Загрузить карту"}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleUpload}
+              disabled={uploading}
+              className="hidden"
+            />
+          </label>
           <input
-            type="file"
-            accept="image/*"
-            onChange={handleUpload}
-            disabled={uploading}
-            className="hidden"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && applyUrlBg()}
+            placeholder="…или ссылка на картинку"
+            className="min-w-0 flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           />
-        </label>
-        <input
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && applyUrlBg()}
-          placeholder="…или ссылка на картинку"
-          className="min-w-0 flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-        />
-        <button
-          onClick={applyUrlBg}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          Применить
-        </button>
-        {bg && (
           <button
-            onClick={() => setBackground(null)}
+            onClick={applyUrlBg}
             className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >
-            Убрать фон
+            Применить
           </button>
-        )}
-      </div>
+          {bg && (
+            <button
+              onClick={() => setBackground(null)}
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              Убрать фон
+            </button>
+          )}
+        </div>
+      )}
 
       {uploadError && <Banner tone="warn">{uploadError}</Banner>}
 

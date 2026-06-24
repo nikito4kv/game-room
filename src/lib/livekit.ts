@@ -6,8 +6,10 @@ import {
   AccessToken,
   RoomServiceClient,
   TokenVerifier,
+  TrackSource,
   WebhookReceiver,
 } from "livekit-server-sdk";
+import type { RoomSecret } from "./roomSecret";
 
 /**
  * Серверные хелперы для работы с LiveKit.
@@ -17,7 +19,7 @@ import {
 
 const scryptAsync = promisify(scrypt);
 
-function requireEnv(name: string): string {
+export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`Не задана переменная окружения ${name} (см. .env.local)`);
@@ -35,36 +37,23 @@ export function getServerUrl(): string {
   return requireEnv("NEXT_PUBLIC_LIVEKIT_URL");
 }
 
-/** Метаданные комнаты, которые мы храним прямо в LiveKit (без своей БД). */
-export type RoomMeta = {
+/**
+ * ПУБЛИЧНЫЕ метаданные комнаты — лежат в metadata комнаты LiveKit и раздаются
+ * всем участникам. Поэтому здесь НЕТ секретов (хэши пароля/ключа хоста, баны,
+ * мьюты живут в Redis — см. RoomSecret в roomSecret.ts). Клиент читает отсюда
+ * hostIdentity (корона) и locked (замок) для UI.
+ */
+export type RoomPublicMeta = {
   title: string;
   isPublic: boolean;
-  /** null — пароля нет; иначе строка вида "salt:hash". */
-  passwordHash: string | null;
-  /** ник создателя комнаты (для отображения/будущей авто-передачи прав). */
+  /** ник создателя/текущего хоста (для отображения и авто-передачи прав). */
   hostIdentity: string;
-  /**
-   * Хэш секрета хоста ("salt:hash"). Права хоста подтверждаются ЭТИМ секретом,
-   * а не совпадением ника, — иначе любой мог бы стать хостом, взяв чужой ник.
-   */
-  hostKeyHash: string;
   createdAt: number;
-  /**
-   * Ники, забаненные на время жизни комнаты (Этап 5). Их не пускаем обратно.
-   * Бан — в пределах сессии: после удаления комнаты список исчезает.
-   */
-  banned?: string[];
   /**
    * Комната закрыта для НОВЫХ участников (замок). Существующие могут
    * переподключаться; новые ники — нет. Закрывает обход бана сменой ника.
    */
   locked?: boolean;
-  /**
-   * Ники, которые уже были в комнате. Нужно, чтобы при замке свой участник мог
-   * вернуться после перезагрузки (а новый — нет). Не путать с правами: членство
-   * не даёт ничего, кроме права переподключиться в закрытую комнату.
-   */
-  members?: string[];
 };
 
 let _roomService: RoomServiceClient | null = null;
@@ -127,17 +116,42 @@ export async function verifyTokenIdentity(
   }
 }
 
-/** Читает и парсит метаданные комнаты. null — комнаты нет или метаданных нет. */
-export async function loadRoomMeta(code: string): Promise<RoomMeta | null> {
+/** Читает публичные метаданные комнаты. null — комнаты нет или метаданных нет. */
+export async function loadPublicMeta(code: string): Promise<RoomPublicMeta | null> {
   const rooms = await getRoomService().listRooms([code]);
   const room = rooms[0];
   if (!room?.metadata) return null;
-  return JSON.parse(room.metadata) as RoomMeta;
+  return JSON.parse(room.metadata) as RoomPublicMeta;
 }
 
-/** Перезаписывает метаданные комнаты целиком (read-modify-write на вызывающем). */
-export async function saveRoomMeta(code: string, meta: RoomMeta): Promise<void> {
+/** Перезаписывает публичные метаданные целиком (read-modify-write на вызывающем). */
+export async function savePublicMeta(code: string, meta: RoomPublicMeta): Promise<void> {
   await getRoomService().updateRoomMetadata(code, JSON.stringify(meta));
+}
+
+/**
+ * Подтверждает права хоста двумя способами (как раньше): мастер-ключ создателя
+ * (hostKey, сверяется с secret.hostKeyHash) ИЛИ собственный LiveKit-токен
+ * текущего хоста (callerToken, ник из него должен совпасть с hostIdentity).
+ * Возвращает и подтверждённый ник вызывающего — он нужен для авто-передачи прав.
+ */
+export async function verifyHostCredentials(
+  publicMeta: RoomPublicMeta,
+  secret: RoomSecret,
+  opts: { hostKey?: string; callerToken?: string; code: string },
+): Promise<{ isHost: boolean; callerIdentity: string | null }> {
+  const byHostKey = Boolean(
+    opts.hostKey &&
+      secret.hostKeyHash &&
+      (await verifyPassword(opts.hostKey.trim(), secret.hostKeyHash)),
+  );
+  let callerIdentity: string | null = null;
+  if (opts.callerToken) {
+    callerIdentity = await verifyTokenIdentity(opts.callerToken, opts.code);
+  }
+  const isHost =
+    byHostKey || (callerIdentity !== null && callerIdentity === publicMeta.hostIdentity);
+  return { isHost, callerIdentity };
 }
 
 // Алфавит без похожих символов (нет 0/O, 1/I/L) — код проще диктовать друзьям.
@@ -187,20 +201,39 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return timingSafeEqual(derived, expected);
 }
 
-/** Создаёт JWT-токен доступа в комнату для конкретного ника. */
+/** Источники, которые публикует участник. Без микрофона — это «заглушён хостом». */
+const SOURCES_WITHOUT_MIC = [
+  TrackSource.CAMERA,
+  TrackSource.SCREEN_SHARE,
+  TrackSource.SCREEN_SHARE_AUDIO,
+];
+
+/**
+ * Создаёт JWT-токен доступа в комнату для конкретного ника.
+ *
+ * TTL короткий (30 мин): даже если токен «утечёт» или участник попытается
+ * переподключиться напрямую к LiveKit в обход /api/token, окно злоупотребления
+ * мало; основное принуждение бана/мьюта — вебхук participant_joined.
+ *
+ * forceMuted/restrictPublish переносят мьют в сам токен: флаг в metadata
+ * участника показывает UI «заглушён», а ограниченный canPublishSources не даёт
+ * публиковать микрофон даже после перезагрузки страницы.
+ */
 export async function createAccessToken(opts: {
   room: string;
   identity: string;
   isHost: boolean;
+  forceMuted?: boolean;
+  restrictPublish?: boolean;
 }): Promise<string> {
   const at = new AccessToken(
     requireEnv("LIVEKIT_API_KEY"),
     requireEnv("LIVEKIT_API_SECRET"),
     {
       identity: opts.identity,
-      // metadata участника — пригодится UI (например, отметить хоста).
-      metadata: JSON.stringify({ isHost: opts.isHost }),
-      ttl: "2h",
+      // metadata участника — пригодится UI (отметить хоста, показать «заглушён»).
+      metadata: JSON.stringify({ isHost: opts.isHost, forceMuted: !!opts.forceMuted }),
+      ttl: "30m",
     },
   );
   at.addGrant({
@@ -209,6 +242,8 @@ export async function createAccessToken(opts: {
     canPublish: true,
     canSubscribe: true,
     canPublishData: true, // понадобится доске тактик (Этап 4)
+    // Пустой список = можно публиковать всё. При мьюте убираем микрофон.
+    canPublishSources: opts.restrictPublish ? SOURCES_WITHOUT_MIC : undefined,
   });
   return at.toJwt();
 }

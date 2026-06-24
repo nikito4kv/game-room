@@ -20,9 +20,31 @@
 # production
 /build
 
+# installed agent skills (local, not committed)
+/.agents/
+/.claude/skills/
+/skills-lock.json
+
 # misc
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 *.pem
+
+# editors / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# logs & caches
+*.log
+logs/
+.cache/
+.tmp/
+tmp/
 
 # debug
 npm-debug.log*
