@@ -9,9 +9,13 @@ import {
   decodeBoardMessage,
   encodeBoardMessage,
   isHexColor,
+  MAX_ID_LEN,
+  MAX_POINTS_PER_STROKE,
+  MAX_STROKES,
   quantizeCoord,
   safeColor,
   sanitizeBgUrl,
+  sanitizeClock,
   sanitizePoints,
   sanitizeStrokes,
   type BoardMessage,
@@ -186,9 +190,16 @@ export default function TacticsBoard({
     const w = container.clientWidth;
     const h = container.clientHeight;
     if (w === 0 || h === 0) return; // скрыто — нечего мерить
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+    // Буфер холста — в ФИЗИЧЕСКИХ пикселях (×devicePixelRatio), CSS-размер остаётся
+    // 100% (см. класс канваса). Иначе на HiDPI/зуме рисунок размывался бы. Все
+    // координаты нормированы 0..1 и умножаются на canvas.width/height, поэтому
+    // дополнительный ctx.scale не нужен — масштаб учитывается автоматически.
+    const dpr = window.devicePixelRatio || 1;
+    const bw = Math.round(w * dpr);
+    const bh = Math.round(h * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
     }
     redraw();
   }, [redraw]);
@@ -279,10 +290,11 @@ export default function TacticsBoard({
       if (!msg) return;
       switch (msg.t) {
         case "stroke": {
-          const e = Number.isFinite(msg.epoch) ? msg.epoch : epochRef.current;
-          if (e < epochRef.current) break; // штрих из эпохи до последней очистки — игнор
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break; // битый/старый epoch — игнор
           const pts = sanitizePoints(msg.points);
-          if (pts.length === 0 || typeof msg.id !== "string" || !msg.id) break;
+          if (pts.length === 0 || typeof msg.id !== "string" || !msg.id || msg.id.length > MAX_ID_LEN)
+            break;
           if (e > epochRef.current) {
             // мы пропустили чью-то «Очистить» — догоняем эпоху и чистим доску
             epochRef.current = e;
@@ -293,6 +305,7 @@ export default function TacticsBoard({
           const list = strokesRef.current;
           let s = list.find((x) => x.id === msg.id);
           if (!s) {
+            if (list.length >= MAX_STROKES) break; // защита от переполнения доски
             s = {
               id: msg.id,
               color: safeColor(msg.color, "#000000"),
@@ -303,12 +316,22 @@ export default function TacticsBoard({
             list.push(s);
           }
           const prev = s.points.length;
-          s.points.push(...pts);
-          paintStroke(s, prev); // дорисовываем только новые точки, не всю доску
+          if (prev < MAX_POINTS_PER_STROKE) {
+            const room = MAX_POINTS_PER_STROKE - prev;
+            s.points.push(...(pts.length > room ? pts.slice(0, room) : pts));
+            // Инкрементальная дорисовка верна только для ВЕРХНЕГО source-over
+            // штриха. Ластик (destination-out) и дорисовка не-верхнего штриха
+            // зависят от порядка наложения → полная перерисовка по порядку массива
+            // (иначе при одновременном рисовании/стирании доски пиров разъезжаются:
+            // стёртое «возвращалось» бы после ближайшего redraw).
+            if (s.mode === "erase" || s !== list[list.length - 1]) redraw();
+            else paintStroke(s, prev); // дорисовываем только новые точки, не всю доску
+          }
           break;
         }
         case "clear": {
-          const e = Number.isFinite(msg.epoch) ? msg.epoch : epochRef.current + 1;
+          const e = sanitizeClock(msg.epoch);
+          if (e === null) break; // битый epoch — игнор
           if (e > epochRef.current) {
             epochRef.current = e;
             strokesRef.current = [];
@@ -318,18 +341,19 @@ export default function TacticsBoard({
           break;
         }
         case "bg": {
-          if (!Number.isFinite(msg.ver)) break;
+          const ver = sanitizeClock(msg.ver);
+          if (ver === null) break;
           const from = raw.from?.identity ?? "";
           // Применяем более новую версию; при равной версии (одновременная смена
           // у двоих) детерминированно выигрывает больший identity — иначе доски
           // разъехались бы навсегда.
-          if (msg.ver < bgVerRef.current) break;
-          if (msg.ver === bgVerRef.current && from <= bgSetterRef.current) break;
+          if (ver < bgVerRef.current) break;
+          if (ver === bgVerRef.current && from <= bgSetterRef.current) break;
           const url = msg.url === null ? null : sanitizeBgUrl(msg.url);
           // Невалидный непустой URL не применяем и версию НЕ двигаем (иначе сожгли
           // бы версию и настоящий фон уже не доехал бы).
           if (msg.url !== null && !url) break;
-          bgVerRef.current = msg.ver;
+          bgVerRef.current = ver;
           bgSetterRef.current = from;
           applyBg(url);
           break;
@@ -341,10 +365,10 @@ export default function TacticsBoard({
           break;
         }
         case "sync-state": {
-          const e = Number.isFinite(msg.epoch) ? msg.epoch : 0;
+          const e = sanitizeClock(msg.epoch);
           let changed = false;
           // Штрихи учитываем, только если снимок не старее нашей последней очистки.
-          if (e >= epochRef.current) {
+          if (e !== null && e >= epochRef.current) {
             if (e > epochRef.current) {
               epochRef.current = e;
               strokesRef.current = [];
@@ -356,6 +380,7 @@ export default function TacticsBoard({
             for (const s of sanitizeStrokes(msg.strokes)) {
               const existing = byId.get(s.id);
               if (!existing) {
+                if (list.length >= MAX_STROKES) break; // защита от переполнения доски
                 list.push(s);
                 byId.set(s.id, s);
                 changed = true;
@@ -367,11 +392,21 @@ export default function TacticsBoard({
           }
           // Фон — по своей версии, независимо от epoch. Невалидный непустой URL
           // игнорируем без сдвига версии (не затираем уже показанный фон).
-          if (Number.isFinite(msg.bgVer) && msg.bgVer > bgVerRef.current) {
+          const bgVer = sanitizeClock(msg.bgVer);
+          const bgFrom = raw.from?.identity ?? "";
+          // Тот же tie-break по identity, что и в живой ветке "bg": при равной
+          // версии выигрывает больший identity — иначе поздний участник мог бы
+          // застрять на другом фоне, чем у комнаты. (Снимок несёт identity
+          // отправителя, не исходного автора фона — для частого случая хватает.)
+          if (
+            bgVer !== null &&
+            (bgVer > bgVerRef.current ||
+              (bgVer === bgVerRef.current && bgFrom > bgSetterRef.current))
+          ) {
             const url = msg.bg === null ? null : sanitizeBgUrl(msg.bg);
             if (msg.bg === null || url) {
-              bgVerRef.current = msg.bgVer;
-              bgSetterRef.current = raw.from?.identity ?? "";
+              bgVerRef.current = bgVer;
+              bgSetterRef.current = bgFrom;
               applyBg(url);
             }
           }
@@ -445,6 +480,14 @@ export default function TacticsBoard({
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [endStroke]);
+
+  // На размонтировании отменяем запланированный кадр отправки — иначе RAF сработал
+  // бы после анмаунта (трогал бы refs и слал бы в уже снятый data-канал).
+  useEffect(() => {
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   // --- Ввод указателем ---
   const pointFromEvent = useCallback((e: React.PointerEvent): Point => {

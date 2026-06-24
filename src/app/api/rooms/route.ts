@@ -6,7 +6,7 @@ import {
   reserveRoomCode,
   type RoomPublicMeta,
 } from "@/lib/livekit";
-import { saveSecret, type RoomSecret } from "@/lib/roomSecret";
+import { createRoomState } from "@/lib/roomSecret";
 import { clientIp, createRoomLimit, rateLimited } from "@/lib/ratelimit";
 
 const MAX_PARTICIPANTS = 6; // целевой максимум из SPEC (2–6)
@@ -74,13 +74,8 @@ export async function POST(request: Request) {
     createdAt: Date.now(),
   };
   // Приватная часть — в Redis (секреты не должны раздаваться участникам).
-  const secret: RoomSecret = {
-    passwordHash: password ? await hashPassword(password) : null,
-    hostKeyHash: await hashPassword(hostKey),
-    banned: [],
-    members: [nickname],
-    mutedIdentities: [],
-  };
+  const passwordHash = password ? await hashPassword(password) : null;
+  const hostKeyHash = await hashPassword(hostKey);
 
   try {
     const code = await reserveRoomCode();
@@ -91,8 +86,8 @@ export async function POST(request: Request) {
       departureTimeout: DEPARTURE_TIMEOUT_SEC,
       maxParticipants: MAX_PARTICIPANTS,
     });
-    // Секрет пишем после создания комнаты — чтобы не плодить осиротевшие записи.
-    await saveSecret(code, secret);
+    // Состояние пишем после создания комнаты — чтобы не плодить осиротевшие записи.
+    await createRoomState(code, { passwordHash, hostKeyHash, initialMember: nickname });
     // hostKey возвращаем один раз создателю — он подтверждает права хоста.
     return NextResponse.json({ code, hostKey });
   } catch (err) {

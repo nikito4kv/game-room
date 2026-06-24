@@ -7,7 +7,7 @@ import {
   verifyPassword,
   type RoomPublicMeta,
 } from "@/lib/livekit";
-import { loadSecret, saveSecret } from "@/lib/roomSecret";
+import { addMemberAndRefreshTtl, loadJoinChecks } from "@/lib/roomSecret";
 import { clientIp, rateLimited, tokenLimit } from "@/lib/ratelimit";
 
 const MAX_NICK_LEN = 24;
@@ -80,14 +80,14 @@ export async function POST(request: Request) {
       );
     }
   }
-  let secret;
+  let checks;
   try {
-    secret = await loadSecret(code);
+    checks = await loadJoinChecks(code, nickname);
   } catch (err) {
-    console.error("loadSecret failed", err);
+    console.error("loadJoinChecks failed", err);
     return NextResponse.json({ error: "Сервис недоступен. Попробуйте позже." }, { status: 502 });
   }
-  if (!meta || !secret) {
+  if (!meta || !checks) {
     return NextResponse.json(
       { error: "Комната повреждена. Создайте новую." },
       { status: 500 },
@@ -98,22 +98,29 @@ export async function POST(request: Request) {
   // обход бана/замка даём только ДЕЙСТВУЮЩЕМУ хосту (ник совпадает с
   // hostIdentity), а не любому, у кого в localStorage лежит ключ. Иначе вторая
   // вкладка того же браузера, где создавали комнату, обходила бы бан и замок.
-  const { isHost } = await verifyHostCredentials(meta, secret, { hostKey, code });
+  const { byHostKey, callerIdentity } = await verifyHostCredentials(meta, checks.auth, {
+    hostKey,
+    code,
+  });
+  const isHost =
+    byHostKey || (callerIdentity !== null && callerIdentity === meta.hostIdentity);
   const isCurrentHost = isHost && nickname === meta.hostIdentity;
 
-  // 3. Бан (Этап 5): забаненный ник не пускаем. Действующего хоста — нельзя.
-  if (!isCurrentHost && secret.banned.includes(nickname)) {
+  // 3. Проверка пароля (если задан) — РАНЬШЕ бана. Иначе по разным статусам
+  // (403 «забанен» vs 401 «неверный пароль») можно было бы узнать статус бана
+  // любого ника, не зная пароля закрытой комнаты (информационный оракул).
+  if (checks.auth.passwordHash) {
+    if (!password || !(await verifyPassword(password, checks.auth.passwordHash))) {
+      return NextResponse.json({ error: "Неверный пароль" }, { status: 401 });
+    }
+  }
+
+  // 4. Бан (Этап 5): забаненный ник не пускаем. Действующего хоста — нельзя.
+  if (!isCurrentHost && checks.banned) {
     return NextResponse.json(
       { error: "Вас забанили в этой комнате" },
       { status: 403 },
     );
-  }
-
-  // 4. Проверка пароля (если задан).
-  if (secret.passwordHash) {
-    if (!password || !(await verifyPassword(password, secret.passwordHash))) {
-      return NextResponse.json({ error: "Неверный пароль" }, { status: 401 });
-    }
   }
 
   // 5. Ник не занят + замок комнаты. Проверку не глотаем: если её нельзя
@@ -130,7 +137,7 @@ export async function POST(request: Request) {
     }
     // Замок: новых участников не пускаем. Свои (кто уже был в комнате) и
     // действующий хост могут вернуться, например после перезагрузки.
-    const wasMember = secret.members.includes(nickname);
+    const wasMember = checks.member;
     if (meta.locked && !isCurrentHost && !wasMember) {
       return NextResponse.json(
         { error: "Комната закрыта для новых участников" },
@@ -148,7 +155,7 @@ export async function POST(request: Request) {
   // 6. Мьют переживает переподключение: если ник заглушён хостом, зашиваем это в
   // сам токен (флаг forceMuted для UI + ограниченный canPublishSources). Иначе
   // достаточно было бы перезагрузить страницу, чтобы снять мьют.
-  const muted = secret.mutedIdentities.includes(nickname);
+  const muted = checks.muted;
 
   // 7. Выдаём токен.
   const token = await createAccessToken({
@@ -159,15 +166,12 @@ export async function POST(request: Request) {
     restrictPublish: muted,
   });
 
-  // Запоминаем ник как участника (best-effort), чтобы при замке он мог вернуться
-  // после перезагрузки. Перечитываем свежий секрет прямо перед записью, чтобы не
-  // затереть только что выставленный бан/мьют другим запросом.
+  // Запоминаем ник как участника, чтобы при замке он мог вернуться после
+  // перезагрузки, и продлеваем TTL состояния (живая комната не истекает). sadd
+  // идемпотентен и атомарен — не затирает баны/мьюты, выставленные параллельно
+  // (в отличие от прежней перезаписи всего блоба).
   try {
-    const fresh = await loadSecret(code);
-    if (fresh && !fresh.members.includes(nickname)) {
-      fresh.members = [...fresh.members, nickname];
-      await saveSecret(code, fresh);
-    }
+    await addMemberAndRefreshTtl(code, nickname);
   } catch {
     // не критично — членство нужно только для реконнекта в закрытую комнату
   }

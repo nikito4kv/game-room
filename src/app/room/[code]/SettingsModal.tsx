@@ -236,6 +236,9 @@ function MicTester({ deviceId, gain }: { deviceId: string; gain: number }) {
   const [loopback, setLoopback] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const testRef = useRef<MicTest | null>(null);
+  // Свежее усиление: тест стартует асинхронно (getUserMedia + resume), и gain мог
+  // измениться за это время — берём актуальное из ref, а не захваченное в аргументе.
+  const gainRef = useRef(gain);
   const rafRef = useRef<number | null>(null);
   // Уровень рисуем напрямую через ref, без setState — иначе ~60 ре-рендеров в
   // секунду на время теста ради ширины одной полоски.
@@ -264,6 +267,7 @@ function MicTester({ deviceId, gain }: { deviceId: string; gain: number }) {
           return;
         }
         testRef.current = t;
+        t.setGain(gainRef.current); // применяем свежее усиление (могло смениться при старте)
         t.setLoopback(loopback);
         const tick = () => {
           if (barRef.current) {
@@ -286,6 +290,7 @@ function MicTester({ deviceId, gain }: { deviceId: string; gain: number }) {
 
   // Живое изменение усиления и loopback без перезапуска теста.
   useEffect(() => {
+    gainRef.current = gain;
     testRef.current?.setGain(gain);
   }, [gain]);
   useEffect(() => {

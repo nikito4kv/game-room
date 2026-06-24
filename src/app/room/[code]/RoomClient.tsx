@@ -514,6 +514,7 @@ function RoomView({
   });
   // Все активные демонстрации экрана в комнате (свои и чужие).
   const screens = useTracks([Track.Source.ScreenShare]);
+  const screensActive = screens.length > 0;
   // Что в центре: "room" (кружки), "screen" (демонстрация) или "board" (доска).
   // Оба контентных блока ВСЕГДА смонтированы (прячем через CSS) — доска продолжает
   // принимать чужие рисунки в фоне и не теряет накопленное (см. TacticsBoard).
@@ -521,8 +522,11 @@ function RoomView({
   const toggleBoard = useCallback(() => {
     const opening = view !== "board";
     playSfx(opening ? "board-open" : "board-close");
-    setView(opening ? "board" : "room");
-  }, [view]);
+    // Закрывая доску при активной демонстрации, возвращаемся к ЭКРАНУ, а не к
+    // кружкам: иначе застряли бы на "room" — эффект ниже реагирует только на смену
+    // screensActive и не перевычисляет вид при ручном выходе из доски.
+    setView(opening ? "board" : screensActive ? "screen" : "room");
+  }, [view, screensActive]);
 
   // Озвученные обёртки своих действий: звук играем в месте нажатия (а не по
   // смене состояния) — так не ловим ложных срабатываний на авто-публикацию
@@ -539,7 +543,11 @@ function RoomView({
     void screen.toggle();
   }, [screen]);
   const toggleDeafenWithSound = useCallback(() => {
-    playSfx(deafened ? "deafen-off" : "deafen-on");
+    // При ВЫКЛЮЧЕНИИ заглушки модульный флаг deafened ещё true (он синхронится
+    // эффектом setSfxDeafened только после ре-рендера), поэтому без urgent звук
+    // deafen-off отсёкся бы гейтом «не играть при deafen». Помечаем выключение
+    // urgent — оно должно прозвучать.
+    playSfx(deafened ? "deafen-off" : "deafen-on", deafened ? { urgent: true } : undefined);
     onToggleDeafen();
   }, [deafened, onToggleDeafen]);
   const leaveWithSound = useCallback(() => {
@@ -548,8 +556,8 @@ function RoomView({
   }, [onLeave]);
   // Демонстрация раскрывает центр сама: появилась шара (своя или чужая) — открываем
   // экран; пропала — возвращаемся к кружкам. Если открыта доска — её не трогаем.
-  const screensActive = screens.length > 0;
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация вида с внешним состоянием демонстраций (LiveKit-треки)
     setView((v) => {
       if (screensActive && v === "room") return "screen";
       if (!screensActive && v === "screen") return "room";
@@ -1075,7 +1083,6 @@ function ParticipantMenu({
     const r = el.getBoundingClientRect();
     const left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8));
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовая корректировка позиции
     setPos({ left, top });
   }, [x, y]);
 

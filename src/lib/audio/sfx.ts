@@ -206,9 +206,12 @@ function playRecipe(notes: Tone[]): void {
     osc.frequency.setValueAtTime(n.freq, start);
     if (n.glideTo) osc.frequency.exponentialRampToValueAtTime(n.glideTo, start + dur);
     const g = c.createGain();
-    // мягкая огибающая: ~12 мс атака, экспоненциальное затухание (без щелчков)
+    // мягкая огибающая: атака ~12 мс, но всегда короче длительности тона (для
+    // совсем коротких dur — иначе событие спада оказалось бы раньше атаки и
+    // огибающая была бы кривой/щёлкала), затем экспоненциальное затухание.
+    const attack = Math.min(0.012, dur * 0.4);
     g.gain.setValueAtTime(0.0001, start);
-    g.gain.exponentialRampToValueAtTime(peak, start + 0.012);
+    g.gain.exponentialRampToValueAtTime(peak, start + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
     osc.connect(g).connect(out);
     osc.start(start);

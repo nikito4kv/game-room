@@ -44,6 +44,19 @@ export type BoardMessage =
 /** Топик data-канала, под которым живут все сообщения доски. */
 export const BOARD_TOPIC = "board";
 
+// --- Жёсткие лимиты приёма ---
+// Данные приходят от других участников (у всех есть canPublishData), поэтому
+// размеры тоже нельзя оставлять без верхней границы — иначе один пир может
+// раздуть память/CPU у всех (DoS) или «заморозить» доску гигантским счётчиком.
+/** Потолок счётчика epoch/ver: больше — отбрасываем (защита от «заморозки»). */
+export const MAX_CLOCK = 1_000_000;
+/** Максимум точек в одном штрихе на приёме (лишние отбрасываются). */
+export const MAX_POINTS_PER_STROKE = 10_000;
+/** Максимум штрихов (в сообщении и всего на доске). */
+export const MAX_STROKES = 5_000;
+/** Максимальная длина id штриха. */
+export const MAX_ID_LEN = 64;
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -74,9 +87,22 @@ export function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
-/** Корректный CSS-цвет в hex (#rgb..#rrggbbaa). Иначе — false. */
+/** Корректный CSS-цвет в hex: ровно 3/4/6/8 цифр (#rgb/#rgba/#rrggbb/#rrggbbaa).
+ *  Длины 5 и 7 — НЕ валидный CSS, и canvas молча рисовал бы прежним цветом. */
 export function isHexColor(v: unknown): v is string {
-  return typeof v === "string" && /^#[0-9a-fA-F]{3,8}$/.test(v);
+  return typeof v === "string" && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v);
+}
+
+/**
+ * Валидный логический счётчик (epoch/ver): конечное неотрицательное целое в
+ * разумных пределах. null — если вне диапазона: тогда сообщение отбрасывается, и
+ * злоумышленник не «замораживает» доску гигантским epoch (Number.isFinite(1e308)
+ * === true, поэтому одной проверки на конечность мало).
+ */
+export function sanitizeClock(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isInteger(v)) return null;
+  if (v < 0 || v > MAX_CLOCK) return null;
+  return v;
 }
 
 /** Возвращает цвет, если он валидный hex, иначе fallback. */
@@ -101,13 +127,14 @@ function sanitizePoint(raw: unknown): Point | null {
   return [clamp01(x), clamp01(y)];
 }
 
-/** Отфильтровывает только корректные точки из произвольного входа. */
+/** Отфильтровывает только корректные точки из произвольного входа (с кэпом). */
 export function sanitizePoints(raw: unknown): Point[] {
   if (!Array.isArray(raw)) return [];
   const out: Point[] = [];
   for (const p of raw) {
     const point = sanitizePoint(p);
     if (point) out.push(point);
+    if (out.length >= MAX_POINTS_PER_STROKE) break; // защита от гигантских пакетов
   }
   return out;
 }
@@ -116,7 +143,7 @@ export function sanitizePoints(raw: unknown): Point[] {
 export function sanitizeStroke(raw: unknown): Stroke | null {
   if (!raw || typeof raw !== "object") return null;
   const s = raw as Record<string, unknown>;
-  if (typeof s.id !== "string" || !s.id) return null;
+  if (typeof s.id !== "string" || !s.id || s.id.length > MAX_ID_LEN) return null;
   const points = sanitizePoints(s.points);
   if (points.length === 0) return null;
   return {
@@ -128,13 +155,14 @@ export function sanitizeStroke(raw: unknown): Stroke | null {
   };
 }
 
-/** Приводит входной массив штрихов (снимок доски) к корректным Stroke[]. */
+/** Приводит входной массив штрихов (снимок доски) к корректным Stroke[] (с кэпом). */
 export function sanitizeStrokes(raw: unknown): Stroke[] {
   if (!Array.isArray(raw)) return [];
   const out: Stroke[] = [];
   for (const s of raw) {
     const stroke = sanitizeStroke(s);
     if (stroke) out.push(stroke);
+    if (out.length >= MAX_STROKES) break; // защита от переполнения доски
   }
   return out;
 }

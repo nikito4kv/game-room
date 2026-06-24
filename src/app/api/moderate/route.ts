@@ -1,13 +1,21 @@
 import { NextResponse } from "next/server";
-import { TrackSource } from "livekit-server-sdk";
 import {
+  enforceParticipantMute,
   getRoomService,
   loadPublicMeta,
   savePublicMeta,
   verifyHostCredentials,
   type RoomPublicMeta,
 } from "@/lib/livekit";
-import { loadSecret, saveSecret, type RoomSecret } from "@/lib/roomSecret";
+import {
+  addBan,
+  addMute,
+  loadAuth,
+  removeBan,
+  removeMember,
+  removeMute,
+  type RoomAuth,
+} from "@/lib/roomSecret";
 import { clientIp, moderateLimit, rateLimited } from "@/lib/ratelimit";
 
 // Единая точка модерации хоста (Этап 5): кик/бан/мьют/передача прав/замок.
@@ -71,36 +79,45 @@ export async function POST(request: Request) {
   const service = getRoomService();
 
   let meta: RoomPublicMeta | null;
-  let secret: RoomSecret | null;
+  let auth: RoomAuth | null;
   try {
-    [meta, secret] = await Promise.all([loadPublicMeta(code), loadSecret(code)]);
+    [meta, auth] = await Promise.all([loadPublicMeta(code), loadAuth(code)]);
   } catch (err) {
     console.error("load room state failed", err);
     return NextResponse.json({ error: "Сервис недоступен" }, { status: 502 });
   }
-  if (!meta || !secret) {
+  if (!meta || !auth) {
     return NextResponse.json({ error: "Комната не найдена" }, { status: 404 });
   }
 
-  // Авторизация: либо мастер-ключ создателя, либо токен текущего хоста.
-  const { isHost, callerIdentity } = await verifyHostCredentials(meta, secret, {
+  // Авторизация. Текущий хост = тот, чей ТОКЕН совпал с hostIdentity. Один
+  // мастер-ключ (byHostKey) больше НЕ даёт власти над активным хостом — права
+  // отзываются при передаче (см. ниже реклейм брошенной комнаты).
+  const { callerIdentity, isCurrentHost } = await verifyHostCredentials(meta, auth, {
     hostKey: body.hostKey,
     callerToken: body.callerToken,
     code,
   });
 
-  // Авто-передача прав: когда хост вышел, оставшийся участник может «занять»
+  // Реклейм/авто-передача: когда хост вышел, оставшийся участник может «занять»
   // вакантное место хоста — но только для СЕБЯ и только если текущего хоста
-  // действительно нет в комнате. Это единственный путь модерации без прав хоста.
-  if (!isHost) {
+  // действительно нет в комнате. Единственный путь занять хоста без isCurrentHost.
+  if (!isCurrentHost) {
     if (action === "transfer" && callerIdentity && target === callerIdentity) {
       const parts = await service.listParticipants(code);
-      const hostPresent = parts.some((x) => x.identity === meta.hostIdentity);
       const callerPresent = parts.some((x) => x.identity === callerIdentity);
-      if (!hostPresent && callerPresent) {
-        meta.hostIdentity = callerIdentity;
-        await savePublicMeta(code, meta);
-        return NextResponse.json({ ok: true });
+      if (callerPresent) {
+        // Перечитываем metadata прямо перед записью (updateRoomMetadata — полная
+        // перезапись без CAS) и занимаем хоста ТОЛЬКО если СВЕЖИЙ текущий хост
+        // отсутствует — иначе параллельную передачу прав можно было бы затереть.
+        const cur = await loadPublicMeta(code);
+        if (cur && !parts.some((x) => x.identity === cur.hostIdentity)) {
+          cur.hostIdentity = callerIdentity;
+          await savePublicMeta(code, cur);
+          // Новый хост не должен оставаться заглушённым (иначе вебхук вернёт мьют).
+          await removeMute(code, callerIdentity).catch(() => {});
+          return NextResponse.json({ ok: true });
+        }
       }
     }
     return NextResponse.json({ error: "Нужны права хоста" }, { status: 403 });
@@ -122,68 +139,39 @@ export async function POST(request: Request) {
       case "kick": {
         // Если участник уже вышел — это не ошибка, цель достигнута.
         await service.removeParticipant(code, target!).catch(() => {});
+        // Снимаем членство: иначе кикнутый под тем же ником обошёл бы замок
+        // (замок пускает «своих» из members). Для постоянного блока — бан.
+        await removeMember(code, target!).catch(() => {});
         break;
       }
       case "ban": {
-        const banned = new Set(secret.banned);
-        banned.add(target!);
-        secret.banned = [...banned];
-        await saveSecret(code, secret);
+        await addBan(code, target!);
         // Удаляем уже зашедшего; если его нет — не страшно.
         await service.removeParticipant(code, target!).catch(() => {});
         break;
       }
       case "unban": {
-        secret.banned = secret.banned.filter((n) => n !== target);
-        await saveSecret(code, secret);
+        await removeBan(code, target!);
         break;
       }
       case "mute":
       case "unmute": {
         const canPublish = action === "unmute";
-        // Состояние мьюта храним в секрете комнаты, чтобы оно пережило
+        // Состояние мьюта храним в Redis-сете, чтобы оно пережило
         // переподключение участника (иначе перезагрузка снимала бы мьют).
-        const mutedSet = new Set(secret.mutedIdentities);
-        if (canPublish) mutedSet.delete(target!);
-        else mutedSet.add(target!);
-        secret.mutedIdentities = [...mutedSet];
-        await saveSecret(code, secret);
-        // Сохраняем флаг в metadata участника, чтобы все клиенты показали
-        // «заглушён хостом». Мержим с существующими метаданными участника.
+        if (canPublish) await removeMute(code, target!);
+        else await addMute(code, target!);
+        // Если участник сейчас в комнате — сразу применяем флаг и ограничение в
+        // его metadata. Если его нет — мьют уже сохранён в Redis и применится на
+        // входе (token + вебхук), поэтому это УСПЕХ, а не 404 (иначе UI показал
+        // бы ошибку, хотя мьют по факту выставлен).
         const parts = await service.listParticipants(code);
         const p = parts.find((x) => x.identity === target);
-        if (!p) {
-          return NextResponse.json(
-            { error: "Участник не в комнате" },
-            { status: 404 },
-          );
+        // Живой флаг/ограничение применяем единым хелпером (общим с вебхуком),
+        // чтобы наборы прав при mute/unmute не разъезжались между путями.
+        if (p) {
+          await enforceParticipantMute(service, code, target!, p.metadata, !canPublish);
         }
-        let pmeta: Record<string, unknown> = {};
-        if (p.metadata) {
-          try {
-            pmeta = JSON.parse(p.metadata) as Record<string, unknown>;
-          } catch {
-            pmeta = {};
-          }
-        }
-        pmeta.forceMuted = !canPublish;
-        // Глушим ТОЛЬКО микрофон: при mute разрешаем публиковать всё, кроме
-        // микрофона (через canPublishSources), чтобы не убить демонстрацию
-        // экрана. При unmute снимаем ограничение (пустой список = можно всё).
-        // ВАЖНО: пропущенные поля permission трактуются как false, поэтому
-        // задаём весь нужный набор явно (иначе отвалится приём/данные).
-        await service.updateParticipant(code, target!, JSON.stringify(pmeta), {
-          canSubscribe: true,
-          canPublish: true,
-          canPublishData: true,
-          canPublishSources: canPublish
-            ? []
-            : [
-                TrackSource.CAMERA,
-                TrackSource.SCREEN_SHARE,
-                TrackSource.SCREEN_SHARE_AUDIO,
-              ],
-        });
         break;
       }
       case "transfer": {
@@ -194,14 +182,22 @@ export async function POST(request: Request) {
             { status: 404 },
           );
         }
-        meta.hostIdentity = target!;
-        await savePublicMeta(code, meta);
+        // Перечитываем metadata прямо перед записью, меняем ТОЛЬКО hostIdentity.
+        const cur = await loadPublicMeta(code);
+        if (!cur) return NextResponse.json({ error: "Комната не найдена" }, { status: 404 });
+        cur.hostIdentity = target!;
+        await savePublicMeta(code, cur);
+        // Новый хост не должен оставаться заглушённым (вебхук вернул бы мьют).
+        await removeMute(code, target!).catch(() => {});
         break;
       }
       case "lock":
       case "unlock": {
-        meta.locked = action === "lock";
-        await savePublicMeta(code, meta);
+        // Перечитываем metadata прямо перед записью, меняем ТОЛЬКО locked.
+        const cur = await loadPublicMeta(code);
+        if (!cur) return NextResponse.json({ error: "Комната не найдена" }, { status: 404 });
+        cur.locked = action === "lock";
+        await savePublicMeta(code, cur);
         break;
       }
       default: {

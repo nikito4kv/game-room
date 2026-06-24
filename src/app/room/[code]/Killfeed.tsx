@@ -40,14 +40,22 @@ export default function Killfeed() {
         setEvents((prev) => prev.map((e) => (e.id === id ? { ...e, state: "shown" } : e))),
       ),
     );
-    timersRef.current.push(
-      setTimeout(() => {
-        setEvents((prev) => prev.map((e) => (e.id === id ? { ...e, state: "leave" } : e)));
-        timersRef.current.push(
-          setTimeout(() => setEvents((prev) => prev.filter((e) => e.id !== id)), EXIT_MS),
-        );
-      }, HOLD_MS),
-    );
+    // Отработавшие таймеры выкидываем из списка, иначе он рос бы бесконечно при
+    // потоке входов/выходов (cleanup эффекта чистит лишь оставшиеся, на анмаунте).
+    const drop = (t: ReturnType<typeof setTimeout>) => {
+      const i = timersRef.current.indexOf(t);
+      if (i !== -1) timersRef.current.splice(i, 1);
+    };
+    const hold = setTimeout(() => {
+      drop(hold);
+      setEvents((prev) => prev.map((e) => (e.id === id ? { ...e, state: "leave" } : e)));
+      const exit = setTimeout(() => {
+        drop(exit);
+        setEvents((prev) => prev.filter((e) => e.id !== id));
+      }, EXIT_MS);
+      timersRef.current.push(exit);
+    }, HOLD_MS);
+    timersRef.current.push(hold);
   }, []);
 
   useEffect(() => {

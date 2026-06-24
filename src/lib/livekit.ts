@@ -9,7 +9,7 @@ import {
   TrackSource,
   WebhookReceiver,
 } from "livekit-server-sdk";
-import type { RoomSecret } from "./roomSecret";
+import type { RoomAuth } from "./roomSecret";
 
 /**
  * Серверные хелперы для работы с LiveKit.
@@ -40,7 +40,7 @@ export function getServerUrl(): string {
 /**
  * ПУБЛИЧНЫЕ метаданные комнаты — лежат в metadata комнаты LiveKit и раздаются
  * всем участникам. Поэтому здесь НЕТ секретов (хэши пароля/ключа хоста, баны,
- * мьюты живут в Redis — см. RoomSecret в roomSecret.ts). Клиент читает отсюда
+ * мьюты живут в Redis — см. приватное состояние в roomSecret.ts). Клиент читает отсюда
  * hostIdentity (корона) и locked (замок) для UI.
  */
 export type RoomPublicMeta = {
@@ -121,7 +121,13 @@ export async function loadPublicMeta(code: string): Promise<RoomPublicMeta | nul
   const rooms = await getRoomService().listRooms([code]);
   const room = rooms[0];
   if (!room?.metadata) return null;
-  return JSON.parse(room.metadata) as RoomPublicMeta;
+  try {
+    return JSON.parse(room.metadata) as RoomPublicMeta;
+  } catch {
+    // Битые metadata не должны ронять вызывающего (напр. Promise.all в вебхуке —
+    // иначе принуждение бана/мьюта молча отключилось бы). Трактуем как «нет meta».
+    return null;
+  }
 }
 
 /** Перезаписывает публичные метаданные целиком (read-modify-write на вызывающем). */
@@ -137,21 +143,24 @@ export async function savePublicMeta(code: string, meta: RoomPublicMeta): Promis
  */
 export async function verifyHostCredentials(
   publicMeta: RoomPublicMeta,
-  secret: RoomSecret,
+  auth: RoomAuth,
   opts: { hostKey?: string; callerToken?: string; code: string },
-): Promise<{ isHost: boolean; callerIdentity: string | null }> {
+): Promise<{ byHostKey: boolean; callerIdentity: string | null; isCurrentHost: boolean }> {
   const byHostKey = Boolean(
     opts.hostKey &&
-      secret.hostKeyHash &&
-      (await verifyPassword(opts.hostKey.trim(), secret.hostKeyHash)),
+      auth.hostKeyHash &&
+      (await verifyPassword(opts.hostKey.trim(), auth.hostKeyHash)),
   );
   let callerIdentity: string | null = null;
   if (opts.callerToken) {
     callerIdentity = await verifyTokenIdentity(opts.callerToken, opts.code);
   }
-  const isHost =
-    byHostKey || (callerIdentity !== null && callerIdentity === publicMeta.hostIdentity);
-  return { isHost, callerIdentity };
+  // «Текущий хост» — тот, чей ТОКЕН совпал с hostIdentity. Это единый источник
+  // правды для moderate/upload: один мастер-ключ не даёт власти над активным
+  // хостом (права отзываются при передаче). byHostKey отдаём отдельно — он нужен
+  // token при входе (там ещё нет callerToken) и реклейму брошенной комнаты.
+  const isCurrentHost = callerIdentity !== null && callerIdentity === publicMeta.hostIdentity;
+  return { byHostKey, callerIdentity, isCurrentHost };
 }
 
 // Алфавит без похожих символов (нет 0/O, 1/I/L) — код проще диктовать друзьям.
@@ -202,7 +211,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 /** Источники, которые публикует участник. Без микрофона — это «заглушён хостом». */
-const SOURCES_WITHOUT_MIC = [
+export const SOURCES_WITHOUT_MIC = [
   TrackSource.CAMERA,
   TrackSource.SCREEN_SHARE,
   TrackSource.SCREEN_SHARE_AUDIO,
@@ -246,4 +255,36 @@ export async function createAccessToken(opts: {
     canPublishSources: opts.restrictPublish ? SOURCES_WITHOUT_MIC : undefined,
   });
   return at.toJwt();
+}
+
+/**
+ * Применяет/снимает принудительный мьют участника: ставит флаг forceMuted в его
+ * metadata (мержа с существующей — не теряем isHost) и ограничивает публикацию
+ * микрофона. Единая точка для /api/moderate и вебхука, чтобы наборы прав не
+ * разъезжались (иначе после реконнекта мьюту вернулся бы микрофон или отвалилась
+ * бы демонстрация). При unmute снимаем ограничение (пустой список = можно всё).
+ */
+export async function enforceParticipantMute(
+  service: RoomServiceClient,
+  code: string,
+  identity: string,
+  existingMetadata: string | null | undefined,
+  muted: boolean,
+): Promise<void> {
+  let pmeta: Record<string, unknown> = {};
+  if (existingMetadata) {
+    try {
+      pmeta = JSON.parse(existingMetadata) as Record<string, unknown>;
+    } catch {
+      pmeta = {};
+    }
+  }
+  pmeta.forceMuted = muted;
+  // Пропущенные поля permission трактуются как false — задаём весь набор явно.
+  await service.updateParticipant(code, identity, JSON.stringify(pmeta), {
+    canSubscribe: true,
+    canPublish: true,
+    canPublishData: true,
+    canPublishSources: muted ? SOURCES_WITHOUT_MIC : [],
+  });
 }

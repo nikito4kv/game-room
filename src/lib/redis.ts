@@ -23,3 +23,24 @@ export function getRedis(): Redis {
   }
   return _redis;
 }
+
+let _redisRaw: Redis | null = null;
+
+/**
+ * Клиент БЕЗ автоматической (де)сериализации JSON. Нужен для состояния комнаты
+ * (см. roomSecret.ts), которое хранится в Redis-сетах: члены сета — это ники,
+ * то есть произвольные строки. С `automaticDeserialization` (включена по
+ * умолчанию) ник вида "42" вернулся бы из `smembers` числом, а ник с `{`/`:`
+ * мог бы упасть на JSON.parse. Тут ники гоняются как непрозрачные строки.
+ * Обычный getRedis() (с авто-парсингом) остаётся для rate limiting.
+ */
+export function getRedisRaw(): Redis {
+  if (!_redisRaw) {
+    _redisRaw = new Redis({
+      url: requireEnv("UPSTASH_REDIS_REST_URL"),
+      token: requireEnv("UPSTASH_REDIS_REST_TOKEN"),
+      automaticDeserialization: false,
+    });
+  }
+  return _redisRaw;
+}

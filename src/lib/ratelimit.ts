@@ -59,11 +59,23 @@ export function uploadLimit(): Ratelimit {
   return _upload;
 }
 
-/** IP клиента из заголовков Vercel. Фолбэк "local" — для дев-окружения. */
+/**
+ * IP клиента для rate limiting. На Vercel `x-real-ip` выставляет САМА платформа
+ * реальным адресом клиента — ему и доверяем. ЛЕВЫЙ элемент `x-forwarded-for`
+ * брать нельзя: он задаётся клиентом (прокси дописывают справа), иначе лимит
+ * обходился бы сменой заголовка. Фолбэк вне Vercel — ПОСЛЕДНИЙ (правый) элемент
+ * x-forwarded-for (адрес от ближайшего доверенного прокси), чтобы хотя бы
+ * разделять клиентов, а не сваливать всех в один общий ключ. "local" — дев.
+ */
 export function clientIp(request: Request): string {
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]!.trim();
-  return request.headers.get("x-real-ip")?.trim() || "local";
+  if (fwd) {
+    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1]!;
+  }
+  return "local";
 }
 
 /**

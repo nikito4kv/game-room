@@ -1,7 +1,11 @@
 import { del, list } from "@vercel/blob";
-import { TrackSource } from "livekit-server-sdk";
-import { getRoomService, getWebhookReceiver, loadPublicMeta } from "@/lib/livekit";
-import { deleteSecret, loadSecret } from "@/lib/roomSecret";
+import {
+  enforceParticipantMute,
+  getRoomService,
+  getWebhookReceiver,
+  loadPublicMeta,
+} from "@/lib/livekit";
+import { deleteRoomState, loadJoinChecks, touchTtl } from "@/lib/roomSecret";
 
 // Вебхук LiveKit. Делает две вещи:
 //  1. room_finished — комната опустела и удалилась → стираем загруженные карты
@@ -12,12 +16,6 @@ import { deleteSecret, loadSecret } from "@/lib/roomSecret";
 //     независимо от того, как он получил токен.
 // Адреса/события этого эндпоинта нужно включить в настройках LiveKit Cloud
 // (events: room_finished, participant_joined).
-
-const SOURCES_WITHOUT_MIC = [
-  TrackSource.CAMERA,
-  TrackSource.SCREEN_SHARE,
-  TrackSource.SCREEN_SHARE_AUDIO,
-];
 
 export async function POST(request: Request) {
   const body = await request.text();
@@ -51,7 +49,7 @@ export async function POST(request: Request) {
       console.error("blob cleanup failed", err);
     }
     try {
-      await deleteSecret(code);
+      await deleteRoomState(code);
     } catch (err) {
       console.error("secret cleanup failed", err);
     }
@@ -61,27 +59,35 @@ export async function POST(request: Request) {
     const code = event.room.name;
     const identity = event.participant.identity;
     try {
-      const [meta, secret] = await Promise.all([loadPublicMeta(code), loadSecret(code)]);
-      if (secret) {
+      const [meta, checks] = await Promise.all([
+        loadPublicMeta(code),
+        loadJoinChecks(code, identity),
+      ]);
+      if (checks) {
         const service = getRoomService();
         const isHost = !!meta && identity === meta.hostIdentity;
         // Бан или замок (для чужого, кто не был участником) → выкидываем сразу.
-        const banned = secret.banned.includes(identity);
-        const lockedOut =
-          !!meta?.locked && !isHost && !secret.members.includes(identity);
-        if (banned || lockedOut) {
+        const lockedOut = !!meta?.locked && !isHost && !checks.member;
+        if (checks.banned || lockedOut) {
           await service.removeParticipant(code, identity).catch(() => {});
-        } else if (secret.mutedIdentities.includes(identity)) {
-          // Заглушён хостом → восстанавливаем ограничение и флаг, даже если
-          // участник зашёл со «свежим» токеном напрямую.
-          await service
-            .updateParticipant(code, identity, JSON.stringify({ forceMuted: true }), {
-              canSubscribe: true,
-              canPublish: true,
-              canPublishData: true,
-              canPublishSources: SOURCES_WITHOUT_MIC,
-            })
-            .catch(() => {});
+        } else {
+          // Хоста НЕ мьютим (даже если ник остался в muted после передачи прав):
+          // иначе новый хост зашёл бы заглушённым с выключенной кнопкой микрофона.
+          if (!isHost && checks.muted) {
+            // Заглушён хостом → восстанавливаем ограничение и флаг (общий хелпер
+            // с /api/moderate; мержит metadata, не теряя isHost), даже если
+            // участник зашёл со «свежим» токеном напрямую.
+            await enforceParticipantMute(
+              service,
+              code,
+              identity,
+              event.participant.metadata,
+              true,
+            ).catch(() => {});
+          }
+          // Живой вход (не кик) — продлеваем TTL, чтобы состояние живой комнаты
+          // не истекло на долгой сессии без модерации.
+          await touchTtl(code).catch(() => {});
         }
       }
     } catch (err) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import { loadPublicMeta, verifyHostCredentials } from "@/lib/livekit";
-import { loadSecret } from "@/lib/roomSecret";
+import { loadAuth } from "@/lib/roomSecret";
 import { clientIp, rateLimited, uploadLimit } from "@/lib/ratelimit";
 
 // Загрузка фон-карты доски в Vercel Blob. По data-каналу LiveKit мы потом гоняем
@@ -81,18 +81,20 @@ export async function POST(request: Request) {
   // файлы под произвольным кодом (их не удалил бы вебхук room_finished) и менять
   // фон у всех участников.
   let meta;
-  let secret;
+  let auth;
   try {
-    [meta, secret] = await Promise.all([loadPublicMeta(code), loadSecret(code)]);
+    [meta, auth] = await Promise.all([loadPublicMeta(code), loadAuth(code)]);
   } catch (err) {
     console.error("load room state failed", err);
     return NextResponse.json({ error: "Сервис недоступен. Попробуйте позже." }, { status: 502 });
   }
-  if (!meta || !secret) {
+  if (!meta || !auth) {
     return NextResponse.json({ error: "Комната не найдена" }, { status: 404 });
   }
-  const { isHost } = await verifyHostCredentials(meta, secret, { hostKey, callerToken, code });
-  if (!isHost) {
+  // Менять фон у всех может только ДЕЙСТВУЮЩИЙ хост (тот, чей токен совпал с
+  // hostIdentity). Один мастер-ключ власти не даёт — она отзывается при передаче.
+  const { isCurrentHost } = await verifyHostCredentials(meta, auth, { hostKey, callerToken, code });
+  if (!isCurrentHost) {
     return NextResponse.json({ error: "Нужны права хоста" }, { status: 403 });
   }
 
