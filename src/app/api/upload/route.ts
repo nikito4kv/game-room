@@ -93,7 +93,15 @@ export async function POST(request: Request) {
   }
   // Менять фон у всех может только ДЕЙСТВУЮЩИЙ хост (тот, чей токен совпал с
   // hostIdentity). Один мастер-ключ власти не даёт — она отзывается при передаче.
-  const { isCurrentHost } = await verifyHostCredentials(meta, auth, { hostKey, callerToken, code });
+  // allowExpiredToken: как и в /api/moderate, токен — лишь доказательство личности
+  // (грант на вход остаётся 30-минутным). Иначе хост не мог бы менять карту через
+  // полчаса, оставаясь в комнате. Ник из токена всё равно сверяется с hostIdentity.
+  const { isCurrentHost } = await verifyHostCredentials(meta, auth, {
+    hostKey,
+    callerToken,
+    code,
+    allowExpiredToken: true,
+  });
   if (!isCurrentHost) {
     return NextResponse.json({ error: "Нужны права хоста" }, { status: 403 });
   }

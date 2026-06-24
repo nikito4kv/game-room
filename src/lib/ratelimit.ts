@@ -7,7 +7,9 @@ import { getRedis } from "./redis";
 // Скользящее окно. Лимитеры ленивые: создаём при первом обращении, чтобы не
 // дёргать env (через getRedis) на этапе сборки.
 let _token: Ratelimit | null = null;
+let _tokenCodeFail: Ratelimit | null = null;
 let _createRoom: Ratelimit | null = null;
+let _listRooms: Ratelimit | null = null;
 let _moderate: Ratelimit | null = null;
 let _upload: Ratelimit | null = null;
 
@@ -23,6 +25,23 @@ export function tokenLimit(): Ratelimit {
   return _token;
 }
 
+/**
+ * Глобальный лимит НЕУДАЧНЫХ попыток пароля на КОМНАТУ (ключ — код, поверх
+ * IP+CODE-лимита). Код публичной комнаты виден в витрине, поэтому per-IP-лимит
+ * обходится ротацией IP; счётчик по коду гасит распределённый перебор. Списываем
+ * ТОЛЬКО при неверном пароле — верный вход лимитер не трогает, легитимных не бьёт.
+ */
+export function tokenCodeFailLimit(): Ratelimit {
+  if (!_tokenCodeFail) {
+    _tokenCodeFail = new Ratelimit({
+      redis: getRedis(),
+      limiter: Ratelimit.slidingWindow(20, "10 m"),
+      prefix: "rl:tokenFail",
+    });
+  }
+  return _tokenCodeFail;
+}
+
 /** Создание комнат: ключ IP — против спама комнат. */
 export function createRoomLimit(): Ratelimit {
   if (!_createRoom) {
@@ -33,6 +52,18 @@ export function createRoomLimit(): Ratelimit {
     });
   }
   return _createRoom;
+}
+
+/** Листинг публичных комнат: ключ IP — умеренный лимит для витрины. */
+export function listRoomsLimit(): Ratelimit {
+  if (!_listRooms) {
+    _listRooms = new Ratelimit({
+      redis: getRedis(),
+      limiter: Ratelimit.slidingWindow(30, "1 m"),
+      prefix: "rl:listRooms",
+    });
+  }
+  return _listRooms;
 }
 
 /** Модерация: ключ IP — умеренный лимит. */

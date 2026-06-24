@@ -63,6 +63,12 @@ export type NoiseSuppression = {
 export async function createNoiseSuppression(
   ctx: AudioContext,
 ): Promise<NoiseSuppression> {
+  // RNNoise работает ТОЛЬКО на 48 кГц. Если контекст не на этой частоте (браузер
+  // проигнорировал sampleRate-хинт) — отказываемся, иначе звук бы исказился.
+  // Ошибку ловит MicProcessor и тихо отключает шумодав (gain продолжает работать).
+  if (ctx.sampleRate !== 48000) {
+    throw new Error("NoiseSuppression: требуется AudioContext на 48 кГц");
+  }
   // Воркеры и wasm независимы — грузим параллельно. addModule идемпотентен в
   // рамках контекста, но контекст у нас одноразовый (см. MicProcessor).
   const [wasmBinary] = await Promise.all([

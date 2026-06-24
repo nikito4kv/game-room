@@ -29,7 +29,9 @@ export type IconName =
   | "map"
   | "check"
   | "dots"
-  | "plus";
+  | "plus"
+  | "refresh"
+  | "search";
 
 const PATHS: Record<IconName, ReactNode> = {
   mic: (
@@ -190,6 +192,20 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <line x1="12" y1="5" x2="12" y2="19" />
       <line x1="5" y1="12" x2="19" y2="12" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M20 11a8 8 0 0 0-14.5-4.5L4 8" />
+      <path d="M4 4v4h4" />
+      <path d="M4 13a8 8 0 0 0 14.5 4.5L20 16" />
+      <path d="M20 20v-4h-4" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="16" y1="16" x2="21" y2="21" />
     </>
   ),
 };

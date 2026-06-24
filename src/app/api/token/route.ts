@@ -3,12 +3,12 @@ import {
   createAccessToken,
   getRoomService,
   getServerUrl,
+  parseRoomMeta,
   verifyHostCredentials,
   verifyPassword,
-  type RoomPublicMeta,
 } from "@/lib/livekit";
 import { addMemberAndRefreshTtl, loadJoinChecks } from "@/lib/roomSecret";
-import { clientIp, rateLimited, tokenLimit } from "@/lib/ratelimit";
+import { clientIp, rateLimited, tokenCodeFailLimit, tokenLimit } from "@/lib/ratelimit";
 
 const MAX_NICK_LEN = 24;
 
@@ -66,20 +66,9 @@ export async function POST(request: Request) {
   }
 
   // Публичные метаданные — из LiveKit; приватные (хэши, баны, мьюты) — из Redis.
-  // Если метаданные есть, но не парсятся, или секрета нет — не пускаем (иначе
-  // можно было бы обойти пароль на повреждённой комнате).
-  let meta: RoomPublicMeta | null = null;
-  if (room.metadata) {
-    try {
-      meta = JSON.parse(room.metadata) as RoomPublicMeta;
-    } catch (err) {
-      console.error("bad room metadata", err);
-      return NextResponse.json(
-        { error: "Комната повреждена. Создайте новую." },
-        { status: 500 },
-      );
-    }
-  }
+  // Битые/неполные метаданные → null (как и отсутствие секрета ниже) — не пускаем,
+  // иначе можно было бы обойти пароль на повреждённой комнате.
+  const meta = parseRoomMeta(room.metadata);
   let checks;
   try {
     checks = await loadJoinChecks(code, nickname);
@@ -111,6 +100,11 @@ export async function POST(request: Request) {
   // любого ника, не зная пароля закрытой комнаты (информационный оракул).
   if (checks.auth.passwordHash) {
     if (!password || !(await verifyPassword(password, checks.auth.passwordHash))) {
+      // Списываем глобальный по-комнате лимит неудач (код публичен → per-IP
+      // обходится ротацией адресов). Исчерпан — 429 вместо 401: дальнейший
+      // перебор по этому коду тормозим, не раскрывая, верен ли был пароль.
+      const overFail = await rateLimited(tokenCodeFailLimit(), code);
+      if (overFail) return overFail;
       return NextResponse.json({ error: "Неверный пароль" }, { status: 401 });
     }
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMediaDeviceSelect } from "@livekit/components-react";
 import { supportsAudioOutputSelection } from "livekit-client";
 import { getSfxEnabled, getSfxVolume, setInputDevice, setOutputDevice } from "@/lib/clientStorage";
@@ -61,7 +61,7 @@ export default function SettingsModal({
         className="modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
+        <header className="settings-header">
           <h2 className="flex items-center gap-2 text-lg font-bold">
             <Icon name="sliders" size={22} className="text-accent-hi" />
             Настройки звука
@@ -69,7 +69,7 @@ export default function SettingsModal({
           <button onClick={onClose} aria-label="Закрыть" className="btn btn--ghost btn--icon">
             <Icon name="close" />
           </button>
-        </div>
+        </header>
 
         {/* ── Микрофон ─────────────────────────────────────────── */}
         <section className="flex flex-col gap-3">
@@ -77,47 +77,46 @@ export default function SettingsModal({
             <Icon name="mic" size={15} /> Микрофон
           </h3>
 
-          <label className="field-label">
-            Устройство
-            <select
-              value={micSel.activeDeviceId}
-              onChange={(e) => {
-                const id = e.target.value;
-                void micSel.setActiveMediaDevice(id);
-                setInputDevice(id);
-              }}
-              className="field"
-            >
-              {micSel.devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || "Микрофон"}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="settings-card">
+            <label className="field-label">
+              Устройство
+              <select
+                value={micSel.activeDeviceId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  void micSel.setActiveMediaDevice(id);
+                  setInputDevice(id);
+                }}
+                className="field"
+              >
+                {micSel.devices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label || "Микрофон"}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <Slider
-            label="Громкость микрофона"
-            value={Math.round(inputGain * 100)}
-            min={0}
-            max={200}
-            onChange={(v) => onChangeInputGain(v / 100)}
-            suffix="%"
-          />
-
-          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-text-dim">
-            <span>
-              Шумоподавление
-              <span className="block text-xs text-text-mute">
-                Убирает дыхание, клавиатуру и фоновый шум
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              checked={noiseSuppression}
-              onChange={(e) => onChangeNoiseSuppression(e.target.checked)}
+            <Slider
+              label="Громкость микрофона"
+              value={Math.round(inputGain * 100)}
+              min={0}
+              max={200}
+              onChange={(v) => onChangeInputGain(v / 100)}
+              suffix="%"
             />
-          </label>
+
+            <SettingRow
+              title="Шумоподавление"
+              desc="Убирает дыхание, клавиатуру и фоновый шум"
+            >
+              <Toggle
+                checked={noiseSuppression}
+                onChange={onChangeNoiseSuppression}
+                label="Шумоподавление"
+              />
+            </SettingRow>
+          </div>
 
           <MicTester deviceId={micSel.activeDeviceId} gain={inputGain} />
         </section>
@@ -128,39 +127,41 @@ export default function SettingsModal({
             <Icon name="volume" size={15} /> Звук участников
           </h3>
 
-          {canPickOutput ? (
-            <label className="field-label">
-              Устройство вывода
-              <select
-                value={spkSel.activeDeviceId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  void spkSel.setActiveMediaDevice(id);
-                  setOutputDevice(id);
-                }}
-                className="field"
-              >
-                {spkSel.devices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || "Устройство вывода"}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <p className="text-xs text-text-mute">
-              Выбор устройства вывода не поддерживается этим браузером.
-            </p>
-          )}
+          <div className="settings-card">
+            {canPickOutput ? (
+              <label className="field-label">
+                Устройство вывода
+                <select
+                  value={spkSel.activeDeviceId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    void spkSel.setActiveMediaDevice(id);
+                    setOutputDevice(id);
+                  }}
+                  className="field"
+                >
+                  {spkSel.devices.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || "Устройство вывода"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="text-xs text-text-mute">
+                Выбор устройства вывода не поддерживается этим браузером.
+              </p>
+            )}
 
-          <Slider
-            label="Общая громкость"
-            value={Math.round(masterVolume * 100)}
-            min={0}
-            max={100}
-            onChange={(v) => onChangeMasterVolume(v / 100)}
-            suffix="%"
-          />
+            <Slider
+              label="Общая громкость"
+              value={Math.round(masterVolume * 100)}
+              min={0}
+              max={100}
+              onChange={(v) => onChangeMasterVolume(v / 100)}
+              suffix="%"
+            />
+          </div>
           <p className="text-xs text-text-mute">
             Громкость каждого участника отдельно настраивается в списке отряда.
           </p>
@@ -169,45 +170,99 @@ export default function SettingsModal({
         {/* ── Звуки интерфейса ─────────────────────────────────── */}
         <section className="flex flex-col gap-3">
           <h3 className="panel-h flex items-center gap-2">
-            <Icon name="volume" size={15} /> Звуки интерфейса
+            <Icon name="volume" size={15} /> Интерфейс
           </h3>
 
-          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-text-dim">
-            <span>Клики, вход/выход, уведомления</span>
-            <input
-              type="checkbox"
-              checked={sfxOn}
-              onChange={(e) => {
-                const on = e.target.checked;
-                setSfxOn(on);
-                setSfxEnabled(on);
-                if (on) playSfx("mic-on", { urgent: true }); // короткий предпросмотр
-              }}
-            />
-          </label>
+          <div className="settings-card">
+            <SettingRow
+              title="Звуки интерфейса"
+              desc="Клики, вход и выход, уведомления"
+            >
+              <Toggle
+                checked={sfxOn}
+                onChange={(on) => {
+                  setSfxOn(on);
+                  setSfxEnabled(on);
+                  if (on) playSfx("mic-on", { urgent: true }); // короткий предпросмотр
+                }}
+                label="Звуки интерфейса"
+              />
+            </SettingRow>
 
-          {sfxOn && (
-            <Slider
-              label="Громкость звуков"
-              value={Math.round(sfxVol * 100)}
-              min={0}
-              max={100}
-              onChange={(v) => {
-                const vol = v / 100;
-                setSfxVol(vol);
-                setSfxVolume(vol);
-                playSfx("mic-on", { urgent: true }); // слышно выбранный уровень
-              }}
-              suffix="%"
-            />
-          )}
+            {sfxOn && (
+              <Slider
+                label="Громкость звуков"
+                value={Math.round(sfxVol * 100)}
+                min={0}
+                max={100}
+                onChange={(v) => {
+                  const vol = v / 100;
+                  setSfxVol(vol);
+                  setSfxVolume(vol);
+                  playSfx("mic-on", { urgent: true }); // слышно выбранный уровень
+                }}
+                suffix="%"
+              />
+            )}
+          </div>
         </section>
       </div>
     </div>
   );
 }
 
-/** Простой ползунок с подписью и значением. */
+/**
+ * Тумблер — кнопка role="switch" (доступнее «голого» чекбокса: фокус с клавиатуры,
+ * понятная роль для скринридера). Включён = зелёный --live, как «в эфире».
+ */
+function Toggle({
+  checked,
+  onChange,
+  label,
+  size,
+}: {
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  label: string;
+  size?: "sm";
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      data-on={checked}
+      onClick={() => onChange(!checked)}
+      className={"switch" + (size === "sm" ? " switch--sm" : "")}
+    >
+      <span className="switch-thumb" />
+    </button>
+  );
+}
+
+/** Ряд настройки: подпись + пояснение слева, контрол (обычно тумблер) справа. */
+function SettingRow({
+  title,
+  desc,
+  children,
+}: {
+  title: string;
+  desc?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="setting-row">
+      <span className="setting-row-text">
+        <span className="setting-row-title">{title}</span>
+        {desc && <span className="setting-row-desc">{desc}</span>}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/** Ползунок с подписью и моноширинным отсчётом; дорожка залита до --fill. */
 function Slider({
   label,
   value,
@@ -223,22 +278,25 @@ function Slider({
   onChange: (v: number) => void;
   suffix?: string;
 }) {
+  const fill = ((value - min) / (max - min)) * 100;
   return (
-    <label className="flex flex-col gap-1.5 text-sm text-text-dim">
-      <span className="flex justify-between">
+    <label className="flex flex-col gap-2 text-sm text-text-dim">
+      <span className="flex items-center justify-between">
         {label}
-        <span className="tabular-nums text-text">
+        <span className="settings-readout">
           {value}
           {suffix}
         </span>
       </span>
       <input
         type="range"
+        className="range"
         min={min}
         max={max}
         step={5}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        style={{ "--fill": `${fill}%` } as CSSProperties}
       />
     </label>
   );
@@ -337,14 +395,10 @@ function MicTester({ deviceId, gain }: { deviceId: string; gain: number }) {
       </div>
 
       {testing && (
-        <label className="flex items-center gap-2 text-xs text-text-mute">
-          <input
-            type="checkbox"
-            checked={loopback}
-            onChange={(e) => setLoopback(e.target.checked)}
-          />
-          Слышать себя (наденьте наушники, чтобы не было эха)
-        </label>
+        <div className="flex items-center justify-between gap-3 text-xs text-text-mute">
+          <span>Слышать себя — наденьте наушники, чтобы не было эха</span>
+          <Toggle size="sm" checked={loopback} onChange={setLoopback} label="Слышать себя" />
+        </div>
       )}
 
       {!testing && (

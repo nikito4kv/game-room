@@ -96,18 +96,34 @@ function getTokenVerifier(): TokenVerifier {
   return _tokenVerifier;
 }
 
+// Допуск часов для verify() в режиме allowExpired. Год — заведомо больше любой
+// реальной непрерывной сессии: jose не умеет «не проверять exp», поэтому
+// просто даём огромный clockTolerance. Число не несущее для безопасности —
+// личность всё равно сверяется с живым hostIdentity (см. verifyTokenIdentity).
+const EXPIRED_TOKEN_TOLERANCE_SECONDS = 365 * 24 * 60 * 60;
+
 /**
  * Проверяет подпись LiveKit-токена и возвращает подтверждённый ник (identity),
  * если токен валиден и выдан для ЭТОЙ комнаты. Иначе null. Так модераторские
  * запросы доказывают «я — этот участник», и выдать себя за другого нельзя
  * (LiveKit гарантирует уникальность identity в комнате).
+ *
+ * allowExpired: игнорировать срок действия токена (exp/nbf). Нужен модерации и
+ * загрузке карты — там токен используется ТОЛЬКО как доказательство личности, а
+ * не как грант на подключение. Подпись/issuer/комната/ник по-прежнему проверяются:
+ * подделать токен без LIVEKIT_API_SECRET нельзя, а актуальность хоста проверяется
+ * отдельно (callerIdentity === hostIdentity). По умолчанию проверка строгая.
  */
 export async function verifyTokenIdentity(
   token: string,
   code: string,
+  opts?: { allowExpired?: boolean },
 ): Promise<string | null> {
   try {
-    const claims = await getTokenVerifier().verify(token);
+    const claims = await getTokenVerifier().verify(
+      token,
+      opts?.allowExpired ? EXPIRED_TOKEN_TOLERANCE_SECONDS : undefined,
+    );
     const identity = claims.sub;
     if (!identity || claims.video?.room !== code) return null;
     return identity;
@@ -116,18 +132,42 @@ export async function verifyTokenIdentity(
   }
 }
 
-/** Читает публичные метаданные комнаты. null — комнаты нет или метаданных нет. */
-export async function loadPublicMeta(code: string): Promise<RoomPublicMeta | null> {
-  const rooms = await getRoomService().listRooms([code]);
-  const room = rooms[0];
-  if (!room?.metadata) return null;
+/**
+ * Строгий разбор публичных метаданных из НЕДОВЕРЕННОЙ строки LiveKit. Проверяем
+ * ФОРМУ (но НЕ isPublic===true — публичность решает вызывающий): объект с
+ * непустыми title/hostIdentity, конечным числом createdAt, boolean isPublic и
+ * опциональным locked. null — нет/битые/неполные metadata. Единый парсер на все
+ * вызовы (loadPublicMeta, витрина, токен) — чтобы трактовка формы не разъезжалась.
+ */
+export function parseRoomMeta(raw: string | undefined): RoomPublicMeta | null {
+  if (!raw) return null;
+  let parsed: unknown;
   try {
-    return JSON.parse(room.metadata) as RoomPublicMeta;
+    parsed = JSON.parse(raw);
   } catch {
     // Битые metadata не должны ронять вызывающего (напр. Promise.all в вебхуке —
     // иначе принуждение бана/мьюта молча отключилось бы). Трактуем как «нет meta».
     return null;
   }
+  if (typeof parsed !== "object" || parsed === null) return null; // напр. "null"/число
+  const m = parsed as Record<string, unknown>;
+  if (typeof m.isPublic !== "boolean") return null;
+  if (typeof m.title !== "string" || !m.title) return null;
+  if (typeof m.hostIdentity !== "string" || !m.hostIdentity) return null;
+  if (typeof m.createdAt !== "number" || !Number.isFinite(m.createdAt)) return null;
+  return {
+    title: m.title,
+    isPublic: m.isPublic,
+    hostIdentity: m.hostIdentity,
+    createdAt: m.createdAt,
+    locked: m.locked === true,
+  };
+}
+
+/** Читает публичные метаданные комнаты. null — комнаты нет или метаданные битые. */
+export async function loadPublicMeta(code: string): Promise<RoomPublicMeta | null> {
+  const rooms = await getRoomService().listRooms([code]);
+  return parseRoomMeta(rooms[0]?.metadata);
 }
 
 /** Перезаписывает публичные метаданные целиком (read-modify-write на вызывающем). */
@@ -144,7 +184,7 @@ export async function savePublicMeta(code: string, meta: RoomPublicMeta): Promis
 export async function verifyHostCredentials(
   publicMeta: RoomPublicMeta,
   auth: RoomAuth,
-  opts: { hostKey?: string; callerToken?: string; code: string },
+  opts: { hostKey?: string; callerToken?: string; code: string; allowExpiredToken?: boolean },
 ): Promise<{ byHostKey: boolean; callerIdentity: string | null; isCurrentHost: boolean }> {
   const byHostKey = Boolean(
     opts.hostKey &&
@@ -153,7 +193,11 @@ export async function verifyHostCredentials(
   );
   let callerIdentity: string | null = null;
   if (opts.callerToken) {
-    callerIdentity = await verifyTokenIdentity(opts.callerToken, opts.code);
+    // allowExpiredToken: для moderate/upload токен — лишь доказательство личности,
+    // его срок действия не важен (актуальность хоста ниже сверяется отдельно).
+    callerIdentity = await verifyTokenIdentity(opts.callerToken, opts.code, {
+      allowExpired: opts.allowExpiredToken,
+    });
   }
   // «Текущий хост» — тот, чей ТОКЕН совпал с hostIdentity. Это единый источник
   // правды для moderate/upload: один мастер-ключ не даёт власти над активным
@@ -222,7 +266,11 @@ export const SOURCES_WITHOUT_MIC = [
  *
  * TTL короткий (30 мин): даже если токен «утечёт» или участник попытается
  * переподключиться напрямую к LiveKit в обход /api/token, окно злоупотребления
- * мало; основное принуждение бана/мьюта — вебхук participant_joined.
+ * мало; основное принуждение бана/мьюта — вебхук participant_joined. Этот срок
+ * ограничивает ИМЕННО грант на подключение/публикацию. Для модерации и загрузки
+ * карты тот же токен используется лишь как доказательство личности — там срок
+ * намеренно игнорируется (см. verifyTokenIdentity allowExpired), иначе хост
+ * терял бы права через 30 мин, оставаясь в живой комнате.
  *
  * forceMuted/restrictPublish переносят мьют в сам токен: флаг в metadata
  * участника показывает UI «заглушён», а ограниченный canPublishSources не даёт

@@ -82,6 +82,23 @@ export async function loadAuth(code: string): Promise<RoomAuth | null> {
 }
 
 /**
+ * Батч-чтение auth по многим комнатам за ОДИН pipeline (витрина публичных
+ * комнат: иначе был бы N+1 — отдельный round-trip на каждую). В Map присутствует
+ * КАЖДЫЙ запрошенный код: значение null — приватного состояния нет (комната
+ * нежизнеспособна, /api/token её отвергнет). Если сам pipeline упадёт — пробросит
+ * исключение (вызывающий решает, как деградировать).
+ */
+export async function loadAuthMany(codes: string[]): Promise<Map<string, RoomAuth | null>> {
+  const result = new Map<string, RoomAuth | null>();
+  if (codes.length === 0) return result;
+  const p = getRedisRaw().pipeline();
+  for (const code of codes) p.get(kAuth(code));
+  const raws = (await p.exec()) as (string | null)[];
+  codes.forEach((code, i) => result.set(code, parseAuth(raws[i])));
+  return result;
+}
+
+/**
  * Продлевает TTL всех существующих ключей комнаты до полного срока. Зовётся при
  * активности (успешный вход, participant_joined), чтобы живая комната не теряла
  * состояние. expire на несуществующем ключе — no-op.

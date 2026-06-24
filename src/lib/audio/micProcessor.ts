@@ -64,9 +64,19 @@ export class MicProcessor
   }
 
   async init(opts: AudioProcessorOptions): Promise<void> {
-    // Свой контекст на 48 кГц (требование RNNoise).
-    const ctx = this.ctx ?? new AudioContext({ sampleRate: 48000 });
-    this.ctx = ctx;
+    // Свой контекст на 48 кГц (требование RNNoise). Если браузер не умеет
+    // форсировать частоту (бросает) — берём дефолтный контекст БЕЗ шумодава: gain
+    // продолжает работать, а не теряем весь процессор. Случай «частоту молча
+    // проигнорировал» страхует проверка 48 кГц в createNoiseSuppression.
+    if (!this.ctx) {
+      try {
+        this.ctx = new AudioContext({ sampleRate: 48000 });
+      } catch {
+        this.ctx = new AudioContext();
+        this.nsEnabled = false;
+      }
+    }
+    const ctx = this.ctx;
 
     if (ctx.state === "suspended") {
       try {

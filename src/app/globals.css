@@ -776,6 +776,181 @@ input[type="checkbox"] {
   animation: modal-in var(--motion) var(--ease-out);
 }
 
+/* ===========================================================================
+   НАСТРОЙКИ: группы-карты, ряды, тумблер, ползунок.
+   Тумблер говорит на языке комнаты: «включено» = зелёный --live (тот же, что
+   «в эфире» / микрофон включён). Это не декор, а единый смысл «активно = зелёное
+   свечение», который игрок уже знает по экрану комнаты.
+   =========================================================================== */
+
+/* Шапка модалки настроек: заголовок + закрыть, отделена тонкой линией. */
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Группа настроек — единый «колодец» со строками через волосяные разделители. */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-card > * {
+  padding: 0.875rem 1rem;
+  margin: 0;
+}
+.settings-card > * + * {
+  border-top: 1px solid var(--border);
+}
+
+/* Ряд «настройка»: слева подпись + пояснение, справа контрол (тумблер/значение). */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.setting-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.setting-row-title {
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+.setting-row-desc {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--text-mute);
+}
+
+/* Числовой отсчёт справа от ползунка — моноширинный, как код комнаты. */
+.settings-readout {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent-hi);
+}
+
+/* --- Тумблер (role="switch") ---------------------------------------------- */
+.switch {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 26px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  background: var(--inset);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition:
+    background var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    box-shadow var(--motion) var(--ease);
+}
+.switch:hover {
+  border-color: var(--text-mute);
+}
+/* Перебиваем глобальный border-radius:2px у :focus-visible — тумблер круглый. */
+.switch:focus-visible {
+  border-radius: var(--radius-pill);
+}
+.switch[data-on="true"] {
+  background: color-mix(in srgb, var(--live) 26%, transparent);
+  border-color: color-mix(in srgb, var(--live) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 12%, transparent);
+}
+.switch[data-on="true"]:hover {
+  border-color: var(--live);
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-mute);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  transition:
+    transform var(--motion) var(--ease-out),
+    background var(--motion) var(--ease);
+}
+.switch[data-on="true"] .switch-thumb {
+  transform: translateX(20px);
+  background: var(--live-hi);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--live) 60%, transparent);
+}
+/* Малый тумблер для мелких опций (напр. «слышать себя» в проверке микрофона). */
+.switch--sm {
+  width: 38px;
+  height: 22px;
+}
+.switch--sm .switch-thumb {
+  width: 16px;
+  height: 16px;
+}
+.switch--sm[data-on="true"] .switch-thumb {
+  transform: translateX(16px);
+}
+
+/* --- Ползунок: залитая дорожка (--fill приходит из JS) + чистый бегунок ----- */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--fill, 0%),
+    var(--border-strong) var(--fill, 0%)
+  );
+  cursor: pointer;
+  outline-offset: 4px;
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  transition:
+    transform var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease);
+}
+.range::-webkit-slider-thumb:hover {
+  box-shadow: var(--glow-accent);
+}
+.range:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+.range::-moz-range-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+}
+.range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
 /* --- Баннеры -------------------------------------------------------------- */
 .banner {
   display: flex;
