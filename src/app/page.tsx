@@ -8,6 +8,8 @@ import {
   stashHostKey,
   stashPassword,
 } from "@/lib/clientStorage";
+import Banner from "@/components/Banner";
+import Icon from "@/components/Icon";
 
 export default function Home() {
   const router = useRouter();
@@ -94,52 +96,54 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-16">
-      <header className="space-y-1">
-        <h1 className="text-3xl font-bold tracking-tight">Game Room</h1>
-        <p className="text-sm text-zinc-500">
-          Голосовая игровая комната без регистрации. Заходи по коду.
+      <header className="rise flex flex-col gap-3">
+        <span className="chip self-start">
+          <span className="dot" /> голосовое лобби
+        </span>
+        <h1 className="font-display text-4xl font-bold tracking-tight">
+          Game<span className="text-accent-hi"> Room</span>
+        </h1>
+        <p className="text-sm text-text-dim">
+          Голосовая игровая комната без регистрации. Заходи по коду — собирай отряд.
         </p>
       </header>
 
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-medium">Ник</span>
+      <label className="field-label rise" style={{ animationDelay: "40ms" }}>
+        <span className="font-medium text-text">Ник</span>
         <input
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
           placeholder="Как вас зовут в игре"
           maxLength={24}
-          className="rounded-md border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+          className="field"
         />
       </label>
 
-      {error && (
-        <p className="rounded-md bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-          {error}
-        </p>
-      )}
+      {error && <Banner tone="error">{error}</Banner>}
 
-      <div className="grid gap-6 sm:grid-cols-2">
+      <div className="grid gap-5 sm:grid-cols-2">
         {/* Создать комнату */}
         <form
           onSubmit={handleCreate}
-          className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+          className="panel panel--accent rise flex flex-col gap-3 p-5"
+          style={{ animationDelay: "80ms" }}
         >
-          <h2 className="font-semibold">Создать комнату</h2>
+          <h2 className="panel-h">Создать комнату</h2>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Название комнаты"
             maxLength={40}
-            className="rounded-md border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="field"
           />
           <input
             type="password"
             value={createPassword}
             onChange={(e) => setCreatePassword(e.target.value)}
             placeholder="Пароль (необязательно)"
-            className="rounded-md border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="field"
           />
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-dim">
             <input
               type="checkbox"
               checked={isPublic}
@@ -147,11 +151,8 @@ export default function Home() {
             />
             Показать в публичном списке
           </label>
-          <button
-            type="submit"
-            disabled={busy}
-            className="mt-auto rounded-md bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-          >
+          <button type="submit" disabled={busy} className="btn btn--primary btn--block mt-auto">
+            <Icon name="plus" />
             {busy ? "Создаём…" : "Создать"}
           </button>
         </form>
@@ -159,28 +160,26 @@ export default function Home() {
         {/* Войти по коду */}
         <form
           onSubmit={handleJoin}
-          className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+          className="panel rise flex flex-col gap-3 p-5"
+          style={{ animationDelay: "120ms" }}
         >
-          <h2 className="font-semibold">Войти по коду</h2>
+          <h2 className="panel-h">Войти по коду</h2>
           <input
             value={joinCode}
             onChange={(e) => setJoinCode(e.target.value)}
-            placeholder="Код комнаты"
+            placeholder="КОД"
             maxLength={6}
-            className="rounded-md border border-zinc-300 px-3 py-2 uppercase dark:border-zinc-700 dark:bg-zinc-900"
+            className="field font-mono uppercase tracking-[0.2em]"
           />
           <input
             type="password"
             value={joinPassword}
             onChange={(e) => setJoinPassword(e.target.value)}
             placeholder="Пароль (если есть)"
-            className="rounded-md border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="field"
           />
-          <button
-            type="submit"
-            disabled={busy}
-            className="mt-auto rounded-md border border-emerald-600 px-4 py-2 font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
-          >
+          <button type="submit" disabled={busy} className="btn btn--block mt-auto">
+            <Icon name="login" />
             Войти
           </button>
         </form>

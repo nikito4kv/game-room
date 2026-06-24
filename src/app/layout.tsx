@@ -1,15 +1,27 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Exo_2, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+// Три семейства дизайн-системы, self-hosted через next/font, с кириллицей.
+// Каждое отдаёт CSS-переменную, на которую ссылаются токены скина (tokens.css):
+//   --font-exo2 → --font-display, --font-inter → --font-ui, --font-jbmono → --font-mono
+// Все три — вариативные шрифты, поэтому weight не указываем (рекомендация next/font).
+const display = Exo_2({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-exo2",
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const ui = Inter({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const mono = JetBrains_Mono({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-jbmono",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -24,8 +36,9 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      lang="ru"
+      data-skin="arena"
+      className={`${display.variable} ${ui.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

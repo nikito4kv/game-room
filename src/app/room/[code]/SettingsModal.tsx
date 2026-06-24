@@ -5,6 +5,7 @@ import { useMediaDeviceSelect } from "@livekit/components-react";
 import { supportsAudioOutputSelection } from "livekit-client";
 import { setInputDevice, setOutputDevice } from "@/lib/clientStorage";
 import { startMicTest, type MicTest } from "@/lib/audio/micTest";
+import Icon from "@/components/Icon";
 
 /**
  * Окно настроек звука (Этап 5a). Рендерится внутри комнаты, поэтому имеет доступ
@@ -42,30 +43,31 @@ export default function SettingsModal({
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
+    <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="flex max-h-[90vh] w-full max-w-lg flex-col gap-6 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Настройки звука"
+        className="modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">Настройки звука</h2>
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="rounded-md border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:hover:bg-zinc-800 hover:bg-zinc-100"
-          >
-            ✕
+          <h2 className="flex items-center gap-2 text-lg font-bold">
+            <Icon name="sliders" size={22} className="text-accent-hi" />
+            Настройки звука
+          </h2>
+          <button onClick={onClose} aria-label="Закрыть" className="btn btn--ghost btn--icon">
+            <Icon name="close" />
           </button>
         </div>
 
         {/* ── Микрофон ─────────────────────────────────────────── */}
         <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-semibold text-zinc-500">Микрофон</h3>
+          <h3 className="panel-h flex items-center gap-2">
+            <Icon name="mic" size={15} /> Микрофон
+          </h3>
 
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="field-label">
             Устройство
             <select
               value={micSel.activeDeviceId}
@@ -74,7 +76,7 @@ export default function SettingsModal({
                 void micSel.setActiveMediaDevice(id);
                 setInputDevice(id);
               }}
-              className="rounded-md border border-zinc-300 px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-800"
+              className="field"
             >
               {micSel.devices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
@@ -98,10 +100,12 @@ export default function SettingsModal({
 
         {/* ── Вывод ────────────────────────────────────────────── */}
         <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-semibold text-zinc-500">Звук участников</h3>
+          <h3 className="panel-h flex items-center gap-2">
+            <Icon name="volume" size={15} /> Звук участников
+          </h3>
 
           {canPickOutput ? (
-            <label className="flex flex-col gap-1 text-sm">
+            <label className="field-label">
               Устройство вывода
               <select
                 value={spkSel.activeDeviceId}
@@ -110,7 +114,7 @@ export default function SettingsModal({
                   void spkSel.setActiveMediaDevice(id);
                   setOutputDevice(id);
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-800"
+                className="field"
               >
                 {spkSel.devices.map((d) => (
                   <option key={d.deviceId} value={d.deviceId}>
@@ -120,7 +124,7 @@ export default function SettingsModal({
               </select>
             </label>
           ) : (
-            <p className="text-xs text-zinc-400">
+            <p className="text-xs text-text-mute">
               Выбор устройства вывода не поддерживается этим браузером.
             </p>
           )}
@@ -133,8 +137,8 @@ export default function SettingsModal({
             onChange={(v) => onChangeMasterVolume(v / 100)}
             suffix="%"
           />
-          <p className="text-xs text-zinc-400">
-            Громкость каждого участника отдельно настраивается в списке справа.
+          <p className="text-xs text-text-mute">
+            Громкость каждого участника отдельно настраивается в списке отряда.
           </p>
         </section>
       </div>
@@ -159,10 +163,10 @@ function Slider({
   suffix?: string;
 }) {
   return (
-    <label className="flex flex-col gap-1 text-sm">
+    <label className="flex flex-col gap-1.5 text-sm text-text-dim">
       <span className="flex justify-between">
         {label}
-        <span className="tabular-nums text-zinc-500">
+        <span className="tabular-nums text-text">
           {value}
           {suffix}
         </span>
@@ -174,7 +178,6 @@ function Slider({
         step={5}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="accent-emerald-600"
       />
     </label>
   );
@@ -247,50 +250,44 @@ function MicTester({ deviceId, gain }: { deviceId: string; gain: number }) {
   }, [loopback]);
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+    <div className="flex flex-col gap-2 rounded-[var(--radius)] border border-border bg-inset p-3">
       <div className="flex items-center justify-between">
         <span className="text-sm">Проверка микрофона</span>
         <button
           onClick={() => setTesting((v) => !v)}
-          className={
-            "rounded-md px-3 py-1 text-sm font-medium " +
-            (testing
-              ? "border border-zinc-300 dark:border-zinc-700"
-              : "bg-emerald-600 text-white hover:bg-emerald-500")
-          }
+          className={"btn btn--sm" + (testing ? "" : " btn--live")}
         >
           {testing ? "Остановить" : "Проверить"}
         </button>
       </div>
 
       {/* Полоска уровня громкости (ширину двигаем через barRef в rAF). */}
-      <div className="h-3 w-full overflow-hidden rounded bg-zinc-200 dark:bg-zinc-700">
+      <div className="h-3 w-full overflow-hidden rounded-full bg-surface-2">
         <div
           ref={barRef}
-          className="h-full bg-emerald-500 transition-[width] duration-75"
-          style={{ width: "0%" }}
+          className="h-full rounded-full transition-[width] duration-75"
+          style={{ width: "0%", background: "var(--live)" }}
         />
       </div>
 
       {testing && (
-        <label className="flex items-center gap-2 text-xs text-zinc-500">
+        <label className="flex items-center gap-2 text-xs text-text-mute">
           <input
             type="checkbox"
             checked={loopback}
             onChange={(e) => setLoopback(e.target.checked)}
-            className="accent-emerald-600"
           />
           Слышать себя (наденьте наушники, чтобы не было эха)
         </label>
       )}
 
       {!testing && (
-        <p className="text-xs text-zinc-400">
+        <p className="text-xs text-text-mute">
           Нажмите «Проверить» и скажите что-нибудь — полоска должна двигаться.
         </p>
       )}
 
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
     </div>
   );
 }

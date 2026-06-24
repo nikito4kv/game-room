@@ -1,0 +1,170 @@
+/* ===========================================================================
+   GAME ROOM — ТОКЕНЫ ДИЗАЙН-СИСТЕМЫ (движок сменяемых тем)
+   ---------------------------------------------------------------------------
+   Три слоя:
+     1) ПРИМИТИВЫ   — сырые значения палитры. Компоненты их НЕ используют.
+     2) СЕМАНТИКА    — значения «по смыслу» (--surface, --accent, --live...).
+                       Это КОНТРАКТ: ровно его заполняет каждый скин.
+     3) ФОРМА/ТИП    — шрифты, радиусы, тени, свечения, текстуры, курсор,
+                       параметры анимаций — тоже под контролем скина.
+
+   Смена скина = установка атрибута data-skin на <html>. CSS-переменные
+   каскадируются => тема меняется мгновенно, без пересборки.
+   По умолчанию (без data-skin) действует бесплатный скин «Arena».
+   =========================================================================== */
+
+/* --------------------------- 1. ПРИМИТИВЫ ---------------------------------- */
+:root {
+  /* Холодные нейтрали (тёмная база) */
+  --c-ink-950: #070a0f;
+  --c-ink-900: #0b0f17;
+  --c-ink-850: #0f141f;
+  --c-ink-800: #141a28;
+  --c-ink-750: #1a2230;
+  --c-ink-700: #222b3b;
+  --c-ink-650: #2e394d;
+  --c-fog-300: #9eacc2;
+  --c-fog-500: #7e8da6;  /* приглушённый текст — поднят для контраста (WCAG AA) */
+  --c-snow:    #e9eef7;
+
+  /* Бренд — ирис (фиолетово-синий неон) */
+  --c-iris-400: #8e86ff;
+  --c-iris-500: #6e66ff;
+  --c-iris-600: #564cde;
+
+  /* «Живое»: голос/онлайн/успех — пружинно-зелёный */
+  --c-live-400: #37f0a0;
+  --c-live-500: #1fd888;
+  --c-live-700: #0e8f5a;
+
+  --c-cyan:     #38d2f0;  /* инфо / ссылки                  */
+  --c-amber:    #f5b70a;  /* хост / корона / предупреждение  */
+  --c-amber-700:#a87c06;
+  --c-rose-400: #ff6473;
+  --c-rose-500: #ff4d5e;  /* опасность / бан / ошибка        */
+  --c-rose-700: #c42e40;
+}
+
+/* ------------------- 2+3. СКИН «ARENA» (бесплатный, по умолчанию) ----------
+   Лежит прямо в :root, чтобы приложение работало без data-skin.
+   Любой другой скин просто переопределяет эти же переменные ниже.          */
+:root,
+[data-skin="arena"] {
+  /* Поверхности и глубина */
+  --bg:            var(--c-ink-900);
+  --bg-deep:       var(--c-ink-950);
+  --surface:       var(--c-ink-800);
+  --surface-2:     var(--c-ink-750);   /* приподнятое / hover */
+  --inset:         var(--c-ink-850);   /* поля ввода, «колодцы» */
+  --border:        var(--c-ink-700);
+  --border-strong: var(--c-ink-650);
+
+  /* Текст */
+  --text:      var(--c-snow);
+  --text-dim:  var(--c-fog-300);
+  --text-mute: var(--c-fog-500);
+
+  /* Акцент (интерактив, бренд, фокус) */
+  --accent:       var(--c-iris-500);
+  --accent-hi:    var(--c-iris-400);
+  --accent-press: var(--c-iris-600);
+  --on-accent:    #ffffff;
+
+  /* Семантика состояний */
+  --live:    var(--c-live-500);   /* говорит / микрофон вкл / на связи */
+  --live-hi: var(--c-live-400);
+  --host:    var(--c-amber);      /* корона хоста */
+  --danger:  var(--c-rose-500);   /* кик / бан / ошибка */
+  --warn:    var(--c-amber);
+  --info:    var(--c-cyan);
+
+  /* Фокус и свечения (узнаваемый «игровой» характер живёт здесь) */
+  --ring:        0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+  --glow-accent: 0 0 20px color-mix(in srgb, var(--accent) 35%, transparent);
+  --glow-live:   0 0 18px color-mix(in srgb, var(--live) 42%, transparent);
+
+  /* Типографика (под контролем скина).
+     Семейства подключает next/font (self-hosted) и отдаёт их через переменные
+     --font-exo2 / --font-inter / --font-jbmono на <html>. Литералы — фолбэк,
+     если приложение открыто без next/font (например, этот файл напрямую). */
+  --font-display: var(--font-exo2, "Exo 2"), system-ui, sans-serif;  /* заголовки, HUD */
+  --font-ui:      var(--font-inter, "Inter"), system-ui, sans-serif;  /* интерфейс, текст */
+  --font-mono:    var(--font-jbmono, "JetBrains Mono"), ui-monospace, monospace; /* код комнаты */
+
+  /* Форма */
+  --radius-sm:   6px;
+  --radius:      10px;
+  --radius-lg:   14px;
+  --radius-pill: 999px;
+  --border-w:    1px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* Иммерсивные хуки (по умолчанию выключены; платный скин их включает) */
+  --texture-app:   none;   /* фон приложения (url(...)) */
+  --texture-panel: none;   /* фон панелей */
+  --texture-btn:   none;   /* фон кнопок */
+  --cursor:        auto;   /* курсор (url(...)) */
+
+  /* Движение (короткое и ease-out — не укачивает; см. prefers-reduced-motion) */
+  --motion-fast: 120ms;
+  --motion:      180ms;
+  --ease:        cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* HUD / игровой каркас — узнаваемый «прицельный» характер */
+  --clip-hud:        polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  --bracket:         color-mix(in srgb, var(--accent) 70%, transparent); /* угловые скобки */
+  --accent-line:     var(--accent);                 /* тонкая акцентная полоса панели */
+  --text-shadow-hud: 0 1px 2px rgba(0, 0, 0, 0.9);  /* текст поверх видео/текстур */
+
+  /* Слои (единая шкала z-index — без «войн за 9999») */
+  --z-base: 1;  --z-dock: 80;  --z-dropdown: 100;  --z-popover: 120;  --z-modal: 200;  --z-tooltip: 300;  --z-notify: 400;
+
+  /* Доступность: масштаб интерфейса (1 = 100%; слайдер 0.75–1.5 в настройках) */
+  --ui-scale: 1;
+}
+
+/* ===========================================================================
+   ПРИМЕРЫ ДРУГИХ СКИНОВ — доказывают, что движок работает.
+   Скин переопределяет ТОЛЬКО семантику/форму. Компоненты не трогаем.
+   Полный иммерсивный скин дополнительно подгружает шрифты, текстуры, звуки
+   и курсор через рантайм (SkinProvider) — см. DESIGN_SYSTEM.md.
+   =========================================================================== */
+
+/* «Neon» — синтвейв-аркада (платный, тизер) */
+[data-skin="neon"] {
+  --bg: #0a0712;  --bg-deep: #060410;  --surface: #140c24;
+  --surface-2: #1c1138;  --inset: #0e0a1c;
+  --border: #2a1b4d;  --border-strong: #3d2870;
+  --text: #f3ecff;  --text-dim: #b9a6e6;  --text-mute: #7c6ba8;
+  --accent: #ff2ec4;  --accent-hi: #ff6fd8;  --accent-press: #d40f9e;
+  --on-accent: #1a0418;
+  --live: #2be8ff;  --live-hi: #7df3ff;  --host: #ffd23f;
+  --danger: #ff4d6d;  --warn: #ffd23f;  --info: #2be8ff;
+  --glow-accent: 0 0 26px color-mix(in srgb, var(--accent) 55%, transparent);
+  --glow-live:   0 0 22px color-mix(in srgb, var(--live) 55%, transparent);
+  --font-display: "Orbitron", "Exo 2", sans-serif;
+  --radius: 6px;
+  --clip-hud: none;                       /* неон опирается на свечение, не на скос */
+  --bracket: var(--accent-hi);
+  --text-shadow-hud: 0 0 6px var(--accent);
+}
+
+/* «Tactical» — CS 1.6 / военный HUD (платный, тизер) */
+[data-skin="tactical"] {
+  --bg: #0e0d0a;  --bg-deep: #080705;  --surface: #16140f;
+  --surface-2: #1f1c14;  --inset: #0b0a07;
+  --border: #332e20;  --border-strong: #4a4230;
+  --text: #ede6d2;  --text-dim: #b3a684;  --text-mute: #75694a;
+  --accent: #ff8a1e;  --accent-hi: #ffa94d;  --accent-press: #d46a08;
+  --on-accent: #1a0f02;
+  --live: #a3c81f;  --live-hi: #c2e84a;  --host: #ffc038;
+  --danger: #e2402e;  --warn: #ffc038;  --info: #5ab0b8;
+  --glow-accent: 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent);
+  --glow-live:   0 0 12px color-mix(in srgb, var(--live) 40%, transparent);
+  --font-display: "Oswald", "Exo 2", sans-serif;
+  --radius: 3px;  --radius-lg: 4px;  --radius-sm: 2px;
+  /* военный HUD: срезаны два угла */
+  --clip-hud: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  --bracket: var(--accent);
+}

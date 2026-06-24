@@ -56,7 +56,7 @@ export default function RoomAudio({
           и она сама прячется. */}
       <StartAudio
         label="🔊 Нажмите, чтобы включить звук"
-        className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-emerald-500"
+        className="btn btn--live fixed bottom-4 left-1/2 z-[var(--z-notify)] -translate-x-1/2 shadow-[var(--shadow-2)]"
       />
     </>
   );

@@ -27,6 +27,7 @@ import {
   setBoardSize as saveBoardSize,
 } from "@/lib/clientStorage";
 import Banner from "@/components/Banner";
+import Icon from "@/components/Icon";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
 // а в штрихе храним долю (px / NOMINAL_WIDTH). При рисовании доля умножается на
@@ -573,11 +574,12 @@ export default function TacticsBoard({
             key={c}
             onClick={() => pickColor(c)}
             aria-label={`Цвет ${c}`}
+            aria-pressed={mode === "draw" && color === c}
             className={
-              "h-7 w-7 rounded-full border-2 transition-transform " +
+              "h-7 w-7 rounded-full border-2 transition-transform duration-100 " +
               (mode === "draw" && color === c
-                ? "border-zinc-900 scale-110 dark:border-white"
-                : "border-zinc-300 dark:border-zinc-600")
+                ? "scale-110 border-text shadow-[var(--glow-accent)]"
+                : "border-border-strong hover:scale-105")
             }
             style={{ backgroundColor: c }}
           />
@@ -587,22 +589,18 @@ export default function TacticsBoard({
           value={color}
           onChange={(e) => pickColor(e.target.value)}
           aria-label="Свой цвет"
-          className="h-7 w-7 cursor-pointer rounded border border-zinc-300 bg-transparent p-0 dark:border-zinc-600"
+          className="h-7 w-7 cursor-pointer rounded border border-border-strong bg-transparent p-0"
         />
 
         <button
           onClick={() => setMode((m) => (m === "erase" ? "draw" : "erase"))}
-          className={
-            "rounded-md border px-3 py-1.5 text-sm font-medium " +
-            (mode === "erase"
-              ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-              : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800")
-          }
+          aria-pressed={mode === "erase"}
+          className={"btn btn--sm" + (mode === "erase" ? " btn--primary" : "")}
         >
-          🧽 Ластик
+          <Icon name="eraser" size={15} /> Ластик
         </button>
 
-        <label className="flex items-center gap-2 text-sm text-zinc-500">
+        <label className="flex items-center gap-2 text-sm text-text-dim">
           Толщина
           <input
             type="range"
@@ -613,19 +611,17 @@ export default function TacticsBoard({
           />
         </label>
 
-        <button
-          onClick={clearBoard}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          🗑 Очистить
+        <button onClick={clearBoard} className="btn btn--sm">
+          <Icon name="trash" size={15} /> Очистить
         </button>
       </div>
 
       {/* Смена фон-карты — только хост (загрузка авторизуется на сервере). */}
       {amHost && (
         <div className="flex flex-wrap items-center gap-2">
-          <label className="cursor-pointer rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
-            {uploading ? "Загрузка…" : "🗺 Загрузить карту"}
+          <label className="btn btn--sm cursor-pointer">
+            <Icon name="map" size={15} />
+            {uploading ? "Загрузка…" : "Загрузить карту"}
             <input
               type="file"
               accept="image/*"
@@ -639,19 +635,13 @@ export default function TacticsBoard({
             onChange={(e) => setUrlInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && applyUrlBg()}
             placeholder="…или ссылка на картинку"
-            className="min-w-0 flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className="field min-w-0 flex-1"
           />
-          <button
-            onClick={applyUrlBg}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
+          <button onClick={applyUrlBg} className="btn btn--sm">
             Применить
           </button>
           {bg && (
-            <button
-              onClick={() => setBackground(null)}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
+            <button onClick={() => setBackground(null)} className="btn btn--sm">
               Убрать фон
             </button>
           )}
@@ -662,7 +652,7 @@ export default function TacticsBoard({
 
       <div
         ref={containerRef}
-        className="relative w-full overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+        className="stage relative w-full"
         style={{ aspectRatio: String(bgAspect ?? DEFAULT_ASPECT) }}
       >
         {/* Фон — отдельный <img>, а не CSS background: так нельзя подсунуть

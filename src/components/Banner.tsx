@@ -1,10 +1,14 @@
-// Небольшой баннер-уведомление. Раньше эта разметка дублировалась в нескольких
+// Небольшой баннер-уведомление. Раньше разметка дублировалась в нескольких
 // местах (переподключение, нет микрофона, ошибка экрана, ошибка загрузки карты);
-// собрали в один компонент с тоном warn/error, чтобы стиль не расходился.
+// собрали в один компонент. Тон задаёт цвет + иконку: цвет никогда не один
+// (требование доступности — colorblind-safe), всегда продублирован значком.
 
-const TONE = {
-  warn: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  error: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+import Icon, { type IconName } from "./Icon";
+
+const TONE: Record<string, { cls: string; icon: IconName }> = {
+  warn: { cls: "banner--warn", icon: "ban" },
+  error: { cls: "banner--error", icon: "ban" },
+  info: { cls: "banner--info", icon: "check" },
 } as const;
 
 export default function Banner({
@@ -14,9 +18,11 @@ export default function Banner({
   tone?: keyof typeof TONE;
   children: React.ReactNode;
 }) {
+  const t = TONE[tone];
   return (
-    <p role="alert" className={`rounded-md px-3 py-2 text-sm ${TONE[tone]}`}>
-      {children}
+    <p role="alert" className={`banner ${t.cls}`}>
+      <Icon name={t.icon} size={18} className="banner-ic" />
+      <span>{children}</span>
     </p>
   );
 }

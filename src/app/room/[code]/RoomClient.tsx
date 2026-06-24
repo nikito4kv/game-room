@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   LiveKitRoom,
   ParticipantName,
   useConnectionState,
+  useConnectionQualityIndicator,
   useIsSpeaking,
   useLocalParticipant,
   useParticipantInfo,
@@ -48,7 +49,9 @@ import { GainProcessor } from "@/lib/audio/gainProcessor";
 import RoomAudio from "./RoomAudio";
 import SettingsModal from "./SettingsModal";
 import TacticsBoard from "./TacticsBoard";
+import Killfeed from "./Killfeed";
 import Banner from "@/components/Banner";
+import Icon, { type IconName } from "@/components/Icon";
 
 type JoinInfo = { token: string; serverUrl: string; title: string; isHost: boolean };
 
@@ -151,19 +154,17 @@ export default function RoomClient({ code }: { code: string }) {
     return (
       <CenteredCard title={`Комната ${code}`}>
         <form onSubmit={handleNickSubmit} className="flex flex-col gap-3">
-          <p className="text-sm text-zinc-500">Введите ник, чтобы войти.</p>
+          <p className="text-sm text-text-dim">Введите ник, чтобы войти.</p>
           <input
             value={nickInput}
             onChange={(e) => setNickInput(e.target.value)}
             placeholder="Ник"
             maxLength={24}
             autoFocus
-            className="rounded-md border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="field"
           />
-          <button
-            type="submit"
-            className="rounded-md bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-500"
-          >
+          <button type="submit" className="btn btn--primary btn--block">
+            <Icon name="login" />
             Войти
           </button>
         </form>
@@ -175,10 +176,7 @@ export default function RoomClient({ code }: { code: string }) {
     return (
       <CenteredCard title={`Комната ${code}`}>
         <Banner tone="error">{error}</Banner>
-        <button
-          onClick={() => router.push("/")}
-          className="rounded-md border border-zinc-300 px-4 py-2 dark:border-zinc-700"
-        >
+        <button onClick={() => router.push("/")} className="btn btn--block">
           На главную
         </button>
       </CenteredCard>
@@ -188,7 +186,9 @@ export default function RoomClient({ code }: { code: string }) {
   if (!join) {
     return (
       <CenteredCard title={`Комната ${code}`}>
-        <p className="text-sm text-zinc-500">Подключаемся…</p>
+        <p className="flex items-center gap-2 text-sm text-text-dim">
+          <span className="dot" /> Подключаемся…
+        </p>
       </CenteredCard>
     );
   }
@@ -447,10 +447,23 @@ function RoomView({
   });
   // Все активные демонстрации экрана в комнате (свои и чужие).
   const screens = useTracks([Track.Source.ScreenShare]);
-  // Что показываем в центре: демонстрацию экрана или доску. Оба блока остаются
-  // смонтированными (неактивный прячем через CSS) — доска при этом продолжает
-  // принимать чужие рисунки в фоне и не теряет накопленное.
-  const [stage, setStage] = useState<"screen" | "board">("screen");
+  // Что в центре: "room" (кружки), "screen" (демонстрация) или "board" (доска).
+  // Оба контентных блока ВСЕГДА смонтированы (прячем через CSS) — доска продолжает
+  // принимать чужие рисунки в фоне и не теряет накопленное (см. TacticsBoard).
+  const [view, setView] = useState<"room" | "screen" | "board">("room");
+  const toggleBoard = useCallback(() => setView((v) => (v === "board" ? "room" : "board")), []);
+  // Демонстрация раскрывает центр сама: появилась шара (своя или чужая) — открываем
+  // экран; пропала — возвращаемся к кружкам. Если открыта доска — её не трогаем.
+  const screensActive = screens.length > 0;
+  useEffect(() => {
+    setView((v) => {
+      if (screensActive && v === "room") return "screen";
+      if (!screensActive && v === "screen") return "room";
+      return v;
+    });
+  }, [screensActive]);
+  // Открытое контекстное меню участника (одно на всю комнату), позиция — у курсора.
+  const [menu, setMenu] = useState<{ p: Participant; x: number; y: number } | null>(null);
   // Запоминаем факт успешного подключения, чтобы отличить «потеряли связь» от
   // обычного начального состояния и от пересоздания компонента в dev (StrictMode).
   const [everConnected, setEverConnected] = useState(false);
@@ -459,19 +472,58 @@ function RoomView({
     if (state === ConnectionState.Connected) setEverConnected(true);
   }, [state]);
 
+  // Горячие клавиши — десктоп-аналог «button prompt». Привязки совпадают с
+  // keycap-подсказками на кнопках (M/D/S/1/2). Берём e.code (физическая клавиша),
+  // чтобы работало и на русской раскладке; не перехватываем при вводе в поля.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      )
+        return;
+      switch (e.code) {
+        case "KeyM":
+          if (!mic.pending && !forceMutedMe) {
+            e.preventDefault();
+            void mic.toggle();
+          }
+          break;
+        case "KeyD":
+          e.preventDefault();
+          onToggleDeafen();
+          break;
+        case "KeyS":
+          if (!screen.pending) {
+            e.preventDefault();
+            setScreenError(false);
+            void screen.toggle();
+          }
+          break;
+        case "Digit2":
+          e.preventDefault();
+          toggleBoard();
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mic, forceMutedMe, onToggleDeafen, screen, toggleBoard]);
+
   // Хост удалил нас из комнаты — отдельный экран с понятной причиной.
   if (removed) {
     return (
-      <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 px-6 py-16">
-        <h1 className="text-xl font-bold">Вас удалили из комнаты</h1>
-        <p className="text-sm text-zinc-500">Хост удалил вас из этой комнаты.</p>
-        <button
-          onClick={onLeave}
-          className="rounded-md bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-500"
-        >
+      <CenteredCard title="Вас удалили из комнаты">
+        <p className="text-sm text-text-dim">Хост удалил вас из этой комнаты.</p>
+        <button onClick={onLeave} className="btn btn--primary btn--block">
           На главную
         </button>
-      </main>
+      </CenteredCard>
     );
   }
 
@@ -479,67 +531,27 @@ function RoomView({
   // молча выкидываем на главную. Кратковременные обрывы LiveKit чинит сам.
   if (everConnected && state === ConnectionState.Disconnected) {
     return (
-      <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 px-6 py-16">
-        <h1 className="text-xl font-bold">Соединение потеряно</h1>
-        <p className="text-sm text-zinc-500">Связь с комнатой прервалась.</p>
-        <button
-          onClick={onLeave}
-          className="rounded-md bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-500"
-        >
+      <CenteredCard title="Соединение потеряно">
+        <p className="text-sm text-text-dim">Связь с комнатой прервалась.</p>
+        <button onClick={onLeave} className="btn btn--primary btn--block">
           На главную
         </button>
-      </main>
+      </CenteredCard>
     );
   }
 
+  const playerCount = participants.length;
+
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-10">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">{title}</h1>
-          <p className="text-sm text-zinc-500">
-            Код: <span className="font-mono font-semibold">{code}</span> · {statusLabel(state)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {amHost && (
-            <button
-              onClick={() => void doModerate(locked ? "unlock" : "lock")}
-              title={
-                locked
-                  ? "Открыть комнату для новых участников"
-                  : "Закрыть комнату для новых участников"
-              }
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:hover:bg-zinc-800 hover:bg-zinc-100"
-            >
-              {locked ? "🔓 Открыть комнату" : "🔒 Закрыть комнату"}
-            </button>
-          )}
-          {!amHost && hasHostKey && (
-            <button
-              onClick={() => void doModerate("transfer", localParticipant.identity)}
-              title="Вы создатель комнаты — вернуть себе права хоста"
-              className="rounded-md border border-amber-400 px-3 py-1.5 text-sm text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/30"
-            >
-              👑 Вернуть права
-            </button>
-          )}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            title="Настройки звука"
-            aria-label="Настройки звука"
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:hover:bg-zinc-800 hover:bg-zinc-100"
-          >
-            ⚙️ Настройки
-          </button>
-          <button
-            onClick={onLeave}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700"
-          >
-            Выйти
-          </button>
-        </div>
-      </header>
+    <main
+      className={
+        "relative flex flex-1 flex-col items-center gap-6 px-4 pt-6 " +
+        (view !== "room" ? "room-stage-open pb-40" : "pb-28")
+      }
+    >
+      <Killfeed />
+
+      <TopInfo title={title} code={code} playerCount={playerCount} locked={locked} />
 
       {settingsOpen && (
         <SettingsModal
@@ -551,96 +563,98 @@ function RoomView({
         />
       )}
 
-      {state === ConnectionState.Reconnecting && (
-        <Banner tone="warn">Связь прервалась, переподключаемся…</Banner>
+      {(state === ConnectionState.Reconnecting ||
+        micDenied ||
+        screenError ||
+        forceMutedMe ||
+        modError) && (
+        <div className="flex w-full max-w-md flex-col gap-2">
+          {state === ConnectionState.Reconnecting && (
+            <Banner tone="warn">Связь прервалась, переподключаемся…</Banner>
+          )}
+          {micDenied && (
+            <Banner tone="warn">
+              Нет доступа к микрофону — вас не слышно. Разрешите доступ в адресной
+              строке браузера и нажмите «Микрофон».
+            </Banner>
+          )}
+          {screenError && (
+            <Banner tone="warn">
+              Демонстрация не запустилась. Возможно, вы закрыли окно выбора —
+              нажмите «Экран» ещё раз.
+            </Banner>
+          )}
+          {forceMutedMe && (
+            <Banner tone="warn">
+              Хост заглушил ваш микрофон. Включить его снова сможет только хост.
+            </Banner>
+          )}
+          {modError && <Banner tone="error">{modError}</Banner>}
+        </div>
       )}
 
-      {micDenied && (
-        <Banner tone="warn">
-          Нет доступа к микрофону — вас не слышно. Разрешите доступ в адресной
-          строке браузера и нажмите «Включить микрофон».
-        </Banner>
-      )}
-
-      {screenError && (
-        <Banner tone="warn">
-          Демонстрация экрана не запустилась. Возможно, вы закрыли окно выбора —
-          нажмите «Показать экран» ещё раз.
-        </Banner>
-      )}
-
-      {forceMutedMe && (
-        <Banner tone="warn">
-          Хост заглушил ваш микрофон. Включить его снова сможет только хост.
-        </Banner>
-      )}
-
-      {modError && <Banner tone="error">{modError}</Banner>}
-
-      <section className="flex flex-wrap gap-2">
-        <button
-          onClick={() => void mic.toggle()}
-          disabled={mic.pending || forceMutedMe}
-          title={forceMutedMe ? "Микрофон заглушён хостом" : undefined}
-          className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-        >
-          {mic.enabled ? "🎙 Выключить микрофон" : "🔇 Включить микрофон"}
-        </button>
-        <button
-          onClick={onToggleDeafen}
-          className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          {deafened ? "🔊 Включить звук" : "🔈 Заглушить всех"}
-        </button>
-        <button
-          onClick={() => {
-            setScreenError(false);
-            void screen.toggle();
-          }}
-          disabled={screen.pending}
-          className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          {screen.enabled ? "⏹ Остановить показ" : "🖥 Показать экран"}
-        </button>
-      </section>
-
-      <div className="flex gap-2">
-        <StageTab active={stage === "screen"} onClick={() => setStage("screen")}>
-          🖥 Экран
-        </StageTab>
-        <StageTab active={stage === "board"} onClick={() => setStage("board")}>
-          ✏️ Доска
-        </StageTab>
-      </div>
-
-      {/* Оба блока смонтированы; неактивный скрыт через hidden. */}
-      <div className={stage === "screen" ? "" : "hidden"}>
-        <ScreenShareStage screens={screens} />
-      </div>
-      <div className={stage === "board" ? "" : "hidden"}>
-        <TacticsBoard code={code} active={stage === "board"} token={token} amHost={amHost} />
-      </div>
-
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-500">
-          Участники ({participants.length})
-        </h2>
-        <ul className="flex flex-col gap-1">
+      {/* Центр: оверлей-сцена (экран/доска) + кружки участников. Оба контентных
+          блока ВСЕГДА смонтированы; неактивный скрыт через hidden (доска не теряет
+          накопленный рисунок и подписку на data-канал). */}
+      <div className="flex w-full max-w-5xl flex-1 flex-col items-center justify-center gap-4">
+        <div className={view === "screen" ? "stage-overlay" : "hidden"}>
+          <ScreenShareStage screens={screens} />
+        </div>
+        <div className={view === "board" ? "stage-overlay" : "hidden"}>
+          <TacticsBoard code={code} active={view === "board"} token={token} amHost={amHost} />
+        </div>
+        <div className="pc-stack">
           {participants.map((p) => (
-            <ParticipantRow
+            <ParticipantCircle
               key={p.identity}
               p={p}
               isHost={p.identity === hostIdentity}
-              amHost={amHost}
-              volume={volumes[p.identity] ?? 1}
-              muted={!!mutes[p.identity]}
-              onChangeVolume={(v) => onChangeParticipantVolume(p.identity, v)}
-              onToggleMute={() => onChangeParticipantMute(p.identity, !mutes[p.identity])}
-              onModerate={doModerate}
+              mutedByMe={!!mutes[p.identity]}
+              onOpenMenu={(target, x, y) => setMenu({ p: target, x, y })}
             />
           ))}
-        </ul>
-      </section>
+        </div>
+      </div>
+
+      <Dock
+        micEnabled={mic.enabled}
+        micPending={mic.pending}
+        forceMutedMe={forceMutedMe}
+        onMic={() => void mic.toggle()}
+        deafened={deafened}
+        onToggleDeafen={onToggleDeafen}
+        screenEnabled={screen.enabled}
+        screenPending={screen.pending}
+        onScreen={() => {
+          setScreenError(false);
+          void screen.toggle();
+        }}
+        boardOpen={view === "board"}
+        onToggleBoard={toggleBoard}
+        amHost={amHost}
+        locked={locked}
+        onLock={() => void doModerate(locked ? "unlock" : "lock")}
+        hasHostKey={hasHostKey}
+        onReturnHost={() => void doModerate("transfer", localParticipant.identity)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onLeave={onLeave}
+      />
+
+      {menu && (
+        <ParticipantMenu
+          key={menu.p.identity}
+          p={menu.p}
+          amHost={amHost}
+          x={menu.x}
+          y={menu.y}
+          volume={volumes[menu.p.identity] ?? 1}
+          muted={!!mutes[menu.p.identity]}
+          onChangeVolume={(v) => onChangeParticipantVolume(menu.p.identity, v)}
+          onToggleMute={() => onChangeParticipantMute(menu.p.identity, !mutes[menu.p.identity])}
+          onModerate={doModerate}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </main>
   );
 }
@@ -658,8 +672,17 @@ function ScreenShareStage({ screens }: { screens: TrackReference[] }) {
 
   if (screens.length === 0) {
     return (
-      <section className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-700">
-        Никто не показывает экран
+      <section className="stage relative flex aspect-video w-full items-center justify-center">
+        <span className="hud-corner tl" />
+        <span className="hud-corner tr" />
+        <span className="hud-corner bl" />
+        <span className="hud-corner br" />
+        <div className="flex flex-col items-center gap-3 text-text-mute">
+          <Icon name="screen-share" size={40} className="opacity-50" />
+          <span className="text-sm" style={{ textShadow: "var(--text-shadow-hud)" }}>
+            Никто не показывает экран
+          </span>
+        </div>
       </section>
     );
   }
@@ -670,9 +693,19 @@ function ScreenShareStage({ screens }: { screens: TrackReference[] }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="relative overflow-hidden rounded-lg border border-zinc-200 bg-black dark:border-zinc-800">
+      <div className="stage relative">
+        <span className="hud-corner tl" />
+        <span className="hud-corner tr" />
+        <span className="hud-corner bl" />
+        <span className="hud-corner br" />
+        <span className="live-badge">
+          <span className="dot" /> LIVE
+        </span>
         <VideoTrack trackRef={focused} className="aspect-video w-full object-contain" />
-        <span className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">
+        <span
+          className="absolute bottom-2 left-2 z-[2] rounded-[var(--radius-sm)] bg-black/60 px-2 py-0.5 text-xs text-white"
+          style={{ textShadow: "var(--text-shadow-hud)" }}
+        >
           <ParticipantName participant={focused.participant} />
           {focused.participant.isLocal && " (вы)"}
         </span>
@@ -687,15 +720,15 @@ function ScreenShareStage({ screens }: { screens: TrackReference[] }) {
               <button
                 key={sid}
                 onClick={() => setFocusedSid(sid)}
-                className={
-                  "relative w-40 overflow-hidden rounded-md border bg-black transition-colors " +
-                  (active
-                    ? "border-emerald-500 ring-1 ring-emerald-500"
-                    : "border-zinc-200 hover:border-zinc-400 dark:border-zinc-800")
+                className="stage relative w-40 cursor-pointer overflow-hidden transition-shadow"
+                style={
+                  active
+                    ? { borderColor: "var(--accent)", boxShadow: "0 0 0 1px var(--accent)" }
+                    : undefined
                 }
               >
                 <VideoTrack trackRef={s} className="aspect-video w-full object-contain" />
-                <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] text-white">
                   <ParticipantName participant={s.participant} />
                   {s.participant.isLocal && " (вы)"}
                 </span>
@@ -708,58 +741,144 @@ function ScreenShareStage({ screens }: { screens: TrackReference[] }) {
   );
 }
 
-/** Вкладка переключателя «Экран / Доска» над центральной областью. */
-function StageTab({
-  active,
-  onClick,
-  children,
+/** Состояние кружка: говорит / заглушён / на связи (приоритет сверху вниз). */
+type CircleState = "speaking" | "muted" | "idle";
+function circleState(s: {
+  isSpeaking: boolean;
+  micOff: boolean;
+  forceMuted: boolean;
+  mutedByMe: boolean;
+}): CircleState {
+  if (s.isSpeaking) return "speaking";
+  if (s.micOff || s.forceMuted || s.mutedByMe) return "muted";
+  return "idle";
+}
+
+/**
+ * Пинг до сервера. Сначала пробуем реальный RTT в мс из статистики WebRTC; путь
+ * room.engine.* помечен @internal, поэтому строго через optional-chaining и
+ * try/catch — при недоступности возвращаем null и откатываемся на индикатор качества.
+ */
+function useRttMs(): number | null {
+  const room = useRoomContext();
+  const [rtt, setRtt] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const eng = (
+          room as unknown as {
+            engine?: {
+              pcManager?: { publisher?: { getPC?: () => RTCPeerConnection; pc?: RTCPeerConnection } };
+            };
+          }
+        ).engine;
+        const pub = eng?.pcManager?.publisher;
+        const pc = pub?.getPC?.() ?? pub?.pc;
+        const stats = await pc?.getStats?.();
+        if (!stats || !alive) return;
+        let ms: number | null = null;
+        stats.forEach((r: { type?: string; nominated?: boolean; currentRoundTripTime?: number }) => {
+          if (r.type === "candidate-pair" && r.nominated && typeof r.currentRoundTripTime === "number") {
+            ms = Math.round(r.currentRoundTripTime * 1000);
+          }
+        });
+        if (alive && ms !== null) setRtt(ms);
+      } catch {
+        // @internal-путь недоступен — тихо остаёмся на фоллбэке (индикатор качества)
+      }
+    };
+    void poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [room]);
+  return rtt;
+}
+
+/** Пинг (мс) с откатом на индикатор качества связи, если RTT недоступен. */
+function Ping() {
+  const rtt = useRttMs();
+  const { localParticipant } = useLocalParticipant();
+  const { quality } = useConnectionQualityIndicator({ participant: localParticipant });
+  if (rtt !== null) {
+    const color = rtt < 80 ? "var(--live)" : rtt < 150 ? "var(--warn)" : "var(--danger)";
+    return (
+      <span className="chip" style={{ color }}>
+        {rtt} мс
+      </span>
+    );
+  }
+  const map: Record<string, { t: string; c: string }> = {
+    excellent: { t: "отлично", c: "var(--live)" },
+    good: { t: "хорошо", c: "var(--live)" },
+    poor: { t: "слабо", c: "var(--warn)" },
+    lost: { t: "нет связи", c: "var(--danger)" },
+    unknown: { t: "…", c: "var(--text-mute)" },
+  };
+  const q = map[quality] ?? map.unknown;
+  return (
+    <span className="chip" style={{ color: q.c }}>
+      {q.t}
+    </span>
+  );
+}
+
+/** Верхняя инфо-строка по центру: название, код, пинг, число игроков. */
+function TopInfo({
+  title,
+  code,
+  playerCount,
+  locked,
 }: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
+  title: string;
+  code: string;
+  playerCount: number;
+  locked: boolean;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className={
-        "rounded-md border px-4 py-1.5 text-sm font-medium transition-colors " +
-        (active
-          ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-          : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800")
-      }
-    >
-      {children}
-    </button>
+    <div className="rise flex flex-col items-center gap-2 text-center">
+      <h1 className="font-display text-xl font-bold tracking-tight">{title}</h1>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <span className="chip">
+          <Icon name="hash" size={15} />
+          <span className="chip--code">{code}</span>
+        </span>
+        <Ping />
+        <span className="chip">
+          <Icon name="users" size={15} />
+          {playerCount} {plural(playerCount, ["игрок", "игрока", "игроков"])}
+        </span>
+        {locked && (
+          <span className="chip" style={{ color: "var(--warn)" }}>
+            <Icon name="lock" size={15} /> закрыта
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
 /**
- * Строка участника: индикация говорящего, значок «в муте», а для ЧУЖИХ —
- * персональный ползунок громкости (0–200%) и кнопка «заглушить для меня».
- * Настройки громкости — локальные «для себя», другим участникам не видны.
+ * Кружок участника по центру комнаты: инициалы, кольцо-состояние (говорит/заглушён),
+ * бейдж-иконка и корона хоста. Клик ЛКМ/ПКМ открывает контекстное меню (по себе —
+ * не открываем: собой не управляют).
  */
-function ParticipantRow({
+function ParticipantCircle({
   p,
   isHost,
-  amHost,
-  volume,
-  muted,
-  onChangeVolume,
-  onToggleMute,
-  onModerate,
+  mutedByMe,
+  onOpenMenu,
 }: {
   p: Participant;
   isHost: boolean;
-  amHost: boolean;
-  volume: number;
-  muted: boolean;
-  onChangeVolume: (v: number) => void;
-  onToggleMute: () => void;
-  onModerate: (action: ModerationAction, target?: string) => void;
+  mutedByMe: boolean;
+  onOpenMenu: (p: Participant, x: number, y: number) => void;
 }) {
   const isSpeaking = useIsSpeaking(p);
-  const micMuted = !p.isMicrophoneEnabled;
-  // Реактивные метаданные участника: флаг «заглушён хостом» (forceMuted).
+  const micOff = !p.isMicrophoneEnabled;
   const info = useParticipantInfo({ participant: p });
   const forceMuted = useMemo(() => {
     if (!info.metadata) return false;
@@ -769,109 +888,328 @@ function ParticipantRow({
       return false;
     }
   }, [info.metadata]);
-  // Кнопки хоста показываем только хосту и только для ЧУЖИХ участников.
-  const showHostControls = amHost && !p.isLocal;
+
+  const cstate = circleState({ isSpeaking, micOff, forceMuted, mutedByMe });
+  const badge: { icon: IconName; color: string } =
+    cstate === "speaking"
+      ? { icon: "volume", color: "var(--live)" }
+      : cstate === "muted"
+        ? { icon: "mic-off", color: "var(--danger)" }
+        : { icon: "mic", color: "var(--text-mute)" };
+
+  const open = (e: React.MouseEvent | React.KeyboardEvent, x: number, y: number) => {
+    if (p.isLocal) return;
+    e.preventDefault();
+    onOpenMenu(p, x, y);
+  };
+
   return (
-    <li
-      className={
-        "flex flex-col gap-2 rounded-md border px-3 py-2 transition-colors " +
-        (isSpeaking
-          ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500 dark:bg-emerald-950/40"
-          : "border-zinc-200 dark:border-zinc-800")
-      }
-    >
-      <div className="flex items-center gap-2">
-        <ParticipantName participant={p} />
-        {isHost && (
-          <span className="text-xs text-amber-500" title="Хост комнаты">
-            👑
-          </span>
-        )}
-        {p.isLocal && <span className="text-xs text-zinc-400">(вы)</span>}
-        {forceMuted && (
-          <span className="text-xs text-red-500" title="Заглушён хостом">
-            🚫
-          </span>
-        )}
-        {micMuted && (
-          <span className="ml-auto text-xs text-zinc-400" title="Микрофон выключен">
-            🔇
-          </span>
-        )}
+    <div className="pc-wrap">
+      <div
+        className={
+          "pc" +
+          (cstate === "speaking" ? " pc--speaking" : cstate === "muted" ? " pc--muted" : "")
+        }
+        title={p.name || p.identity}
+        role={p.isLocal ? undefined : "button"}
+        tabIndex={p.isLocal ? undefined : 0}
+        aria-label={p.isLocal ? undefined : `${p.name || p.identity} — действия`}
+        onClick={(e) => open(e, e.clientX, e.clientY)}
+        onContextMenu={(e) => open(e, e.clientX, e.clientY)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            const r = e.currentTarget.getBoundingClientRect();
+            open(e, r.left + r.width / 2, r.bottom);
+          }
+        }}
+      >
+        {initials(p.name || p.identity)}
+        {isHost && <Icon name="crown" size={16} className="pc-crown" />}
+        <span
+          className="pc-badge"
+          style={{ "--pc-badge": badge.color } as React.CSSProperties}
+          aria-hidden="true"
+        >
+          <Icon name={badge.icon} size={12} />
+        </span>
       </div>
-
-      {showHostControls && (
-        <div className="flex flex-wrap items-center gap-1">
-          <button
-            onClick={() => onModerate("transfer", p.identity)}
-            className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            👑 Сделать хостом
-          </button>
-          <button
-            onClick={() => onModerate(forceMuted ? "unmute" : "mute", p.identity)}
-            className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            {forceMuted ? "🔈 Вернуть микрофон" : "🚫 Заглушить"}
-          </button>
-          <button
-            onClick={() => onModerate("kick", p.identity)}
-            className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-orange-600 hover:bg-orange-50 dark:border-zinc-700 dark:hover:bg-orange-950/30"
-          >
-            🚪 Кикнуть
-          </button>
-          <button
-            onClick={() => onModerate("ban", p.identity)}
-            className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:hover:bg-red-950/30"
-          >
-            ⛔ Забанить
-          </button>
-        </div>
-      )}
-
-      {!p.isLocal && (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onToggleMute}
-            title={muted ? "Включить звук участника" : "Заглушить участника для себя"}
-            aria-label={muted ? "Включить звук участника" : "Заглушить участника для себя"}
-            className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs dark:border-zinc-700 dark:hover:bg-zinc-800 hover:bg-zinc-100"
-          >
-            {muted ? "🔇" : "🔊"}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={200}
-            step={5}
-            value={Math.round(volume * 100)}
-            onChange={(e) => onChangeVolume(Number(e.target.value) / 100)}
-            disabled={muted}
-            className="flex-1 accent-emerald-600 disabled:opacity-40"
-            aria-label="Громкость участника"
-          />
-          <span className="w-10 text-right text-xs tabular-nums text-zinc-500">
-            {Math.round(volume * 100)}%
-          </span>
-        </div>
-      )}
-    </li>
+      <span className="pc-name">
+        <ParticipantName participant={p} />
+        {p.isLocal && " (вы)"}
+      </span>
+    </div>
   );
 }
 
-function statusLabel(state: ConnectionState): string {
-  switch (state) {
-    case ConnectionState.Connected:
-      return "на связи";
-    case ConnectionState.Connecting:
-      return "подключение…";
-    case ConnectionState.Reconnecting:
-      return "переподключение…";
-    case ConnectionState.Disconnected:
-      return "не подключено";
-    default:
-      return String(state);
-  }
+/**
+ * Контекстное меню участника у курсора (ЛКМ/ПКМ по кружку). Объединяет локальные
+ * настройки «для себя» (громкость, заглушить) и — для хоста — модерацию (передать
+ * права, заглушить микрофон, кикнуть, забанить). Закрывается по клику вне и Esc.
+ */
+function ParticipantMenu({
+  p,
+  amHost,
+  x,
+  y,
+  volume,
+  muted,
+  onChangeVolume,
+  onToggleMute,
+  onModerate,
+  onClose,
+}: {
+  p: Participant;
+  amHost: boolean;
+  x: number;
+  y: number;
+  volume: number;
+  muted: boolean;
+  onChangeVolume: (v: number) => void;
+  onToggleMute: () => void;
+  onModerate: (action: ModerationAction, target?: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  const info = useParticipantInfo({ participant: p });
+  const forceMuted = useMemo(() => {
+    if (!info.metadata) return false;
+    try {
+      return !!(JSON.parse(info.metadata) as { forceMuted?: boolean }).forceMuted;
+    } catch {
+      return false;
+    }
+  }, [info.metadata]);
+
+  // После рендера прижимаем позицию к экрану, чтобы меню не вылезло за край.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
+    const top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовая корректировка позиции
+    setPos({ left, top });
+  }, [x, y]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const run = (action: ModerationAction) => {
+    onClose();
+    onModerate(action, p.identity);
+  };
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      className="menu menu--at-cursor"
+      style={{ left: pos.left, top: pos.top }}
+    >
+      <div className="menu-vol">
+        <div className="menu-vol-head">
+          <span>Громкость</span>
+          <span style={{ color: "var(--text)" }}>{Math.round(volume * 100)}%</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={200}
+          step={5}
+          value={Math.round(volume * 100)}
+          onChange={(e) => onChangeVolume(Number(e.target.value) / 100)}
+          disabled={muted}
+          aria-label="Громкость участника"
+          style={{ width: "100%" }}
+        />
+      </div>
+      <button role="menuitem" onClick={onToggleMute} className="menu-item">
+        <Icon name={muted ? "volume-off" : "volume"} size={16} />
+        {muted ? "Включить звук" : "Заглушить для себя"}
+      </button>
+
+      {amHost && (
+        <>
+          <div style={{ height: 1, background: "var(--border)", margin: "3px 4px" }} />
+          <button role="menuitem" onClick={() => run("transfer")} className="menu-item">
+            <Icon name="crown" size={16} /> Сделать хостом
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => run(forceMuted ? "unmute" : "mute")}
+            className="menu-item"
+          >
+            <Icon name={forceMuted ? "mic" : "mic-off"} size={16} />
+            {forceMuted ? "Вернуть микрофон" : "Заглушить микрофон"}
+          </button>
+          <button role="menuitem" onClick={() => run("kick")} className="menu-item menu-item--danger">
+            <Icon name="logout" size={16} /> Кикнуть
+          </button>
+          <button role="menuitem" onClick={() => run("ban")} className="menu-item menu-item--danger">
+            <Icon name="ban" size={16} /> Забанить
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Нижний фиксированный док: всё управление комнатой, как панель абилок в игре. */
+function Dock({
+  micEnabled,
+  micPending,
+  forceMutedMe,
+  onMic,
+  deafened,
+  onToggleDeafen,
+  screenEnabled,
+  screenPending,
+  onScreen,
+  boardOpen,
+  onToggleBoard,
+  amHost,
+  locked,
+  onLock,
+  hasHostKey,
+  onReturnHost,
+  onOpenSettings,
+  onLeave,
+}: {
+  micEnabled: boolean;
+  micPending: boolean;
+  forceMutedMe: boolean;
+  onMic: () => void;
+  deafened: boolean;
+  onToggleDeafen: () => void;
+  screenEnabled: boolean;
+  screenPending: boolean;
+  onScreen: () => void;
+  boardOpen: boolean;
+  onToggleBoard: () => void;
+  amHost: boolean;
+  locked: boolean;
+  onLock: () => void;
+  hasHostKey: boolean;
+  onReturnHost: () => void;
+  onOpenSettings: () => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div className="dock">
+      <button
+        onClick={onMic}
+        disabled={micPending || forceMutedMe}
+        title={forceMutedMe ? "Микрофон заглушён хостом" : "Микрофон (M)"}
+        className={"dock-btn" + (micEnabled ? " dock-btn--live" : "")}
+      >
+        <Icon name={micEnabled ? "mic" : "mic-off"} size={18} />
+        Микрофон
+      </button>
+      <button
+        onClick={onToggleDeafen}
+        title="Заглушить/включить весь звук (D)"
+        className={"dock-btn" + (deafened ? " dock-btn--off" : "")}
+      >
+        <Icon name={deafened ? "volume-off" : "volume"} size={18} />
+        {deafened ? "Звук выкл" : "Звук вкл"}
+      </button>
+
+      <span className="dock-sep" />
+
+      <button
+        onClick={onScreen}
+        disabled={screenPending}
+        title="Демонстрация экрана (S)"
+        className={"dock-btn" + (screenEnabled ? " dock-btn--active" : "")}
+      >
+        <Icon name={screenEnabled ? "screen-stop" : "screen-share"} size={18} />
+        {screenEnabled ? "Стоп показ" : "Экран"}
+      </button>
+      <button
+        onClick={onToggleBoard}
+        title="Доска тактик (2)"
+        className={"dock-btn" + (boardOpen ? " dock-btn--active" : "")}
+      >
+        <Icon name="pencil" size={18} />
+        Доска
+      </button>
+
+      <span className="dock-sep" />
+
+      {amHost && (
+        <button
+          onClick={onLock}
+          aria-label={locked ? "Открыть комнату" : "Закрыть комнату"}
+          title={
+            locked
+              ? "Открыть комнату для новых участников"
+              : "Закрыть комнату для новых участников"
+          }
+          className={"dock-btn dock-btn--icon" + (locked ? " dock-btn--active" : "")}
+        >
+          <Icon name={locked ? "lock-open" : "lock"} size={18} />
+        </button>
+      )}
+      {!amHost && hasHostKey && (
+        <button
+          onClick={onReturnHost}
+          aria-label="Вернуть права хоста"
+          title="Вы создатель комнаты — вернуть себе права хоста"
+          className="dock-btn dock-btn--icon"
+          style={{ color: "var(--host)" }}
+        >
+          <Icon name="crown" size={18} />
+        </button>
+      )}
+      <button
+        onClick={onOpenSettings}
+        aria-label="Настройки звука"
+        title="Настройки звука"
+        className="dock-btn dock-btn--icon"
+      >
+        <Icon name="sliders" size={18} />
+      </button>
+      <button
+        onClick={onLeave}
+        aria-label="Выйти из комнаты"
+        title="Выйти из комнаты"
+        className="dock-btn dock-btn--icon dock-btn--danger"
+      >
+        <Icon name="logout" size={18} />
+      </button>
+    </div>
+  );
+}
+
+/** Инициалы для аватар-плитки: 1–2 буквы из ника. */
+function initials(s: string): string {
+  const parts = s.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "??";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+/** Русское склонение по числу: [1, 2–4, 5+]. */
+function plural(n: number, forms: [string, string, string]): string {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return forms[0];
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return forms[1];
+  return forms[2];
 }
 
 function CenteredCard({
@@ -883,8 +1221,10 @@ function CenteredCard({
 }) {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 px-6 py-16">
-      <h1 className="text-xl font-bold">{title}</h1>
-      {children}
+      <div className="panel panel--accent rise flex flex-col gap-4 p-6">
+        <h1 className="font-display text-xl font-bold">{title}</h1>
+        {children}
+      </div>
     </main>
   );
 }
