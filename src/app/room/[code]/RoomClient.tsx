@@ -920,6 +920,64 @@ function Ping() {
   );
 }
 
+/**
+ * Чип с кодом комнаты — он же кнопка «скопировать ссылку-приглашение».
+ * Наведение подсвечивает код (см. .chip--copy в globals.css), клик копирует
+ * https://<origin>/room/<КОД> и на ~1.5 c показывает зелёную галочку «Скопировано».
+ * Ссылку строим лениво в обработчике (window только на клиенте). Тостов в проекте
+ * нет — фидбэк держим локальным состоянием самой кнопки.
+ */
+function RoomCodeChip({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+    },
+    [],
+  );
+
+  async function copyLink() {
+    const url = `${window.location.origin}/room/${code}`;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(url);
+      ok = true;
+    } catch {
+      // Небезопасный контекст или старый браузер — фоллбэк через временный textarea.
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      document.body.removeChild(ta);
+    }
+    if (!ok) return; // не вышло скопировать — не вводим в заблуждение фидбэком
+    setCopied(true);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <button
+      type="button"
+      className={`chip chip--copy${copied ? " is-copied" : ""}`}
+      onClick={copyLink}
+      aria-label={copied ? "Ссылка скопирована" : "Скопировать ссылку-приглашение"}
+    >
+      <Icon name={copied ? "check" : "hash"} size={15} />
+      {copied ? "Скопировано" : <span className="chip--code">{code}</span>}
+    </button>
+  );
+}
+
 /** Верхняя инфо-строка по центру: название, код, пинг, число игроков. */
 function TopInfo({
   title,
@@ -936,10 +994,7 @@ function TopInfo({
     <div className="rise flex flex-col items-center gap-2 text-center">
       <h1 className="font-display text-xl font-bold tracking-tight">{title}</h1>
       <div className="flex flex-wrap items-center justify-center gap-2">
-        <span className="chip">
-          <Icon name="hash" size={15} />
-          <span className="chip--code">{code}</span>
-        </span>
+        <RoomCodeChip code={code} />
         <Ping />
         <span className="chip">
           <Icon name="users" size={15} />
