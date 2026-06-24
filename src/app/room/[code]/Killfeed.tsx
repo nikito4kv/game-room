@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRoomContext } from "@livekit/components-react";
 import { type Participant, RoomEvent } from "livekit-client";
 import Icon, { type IconName } from "@/components/Icon";
+import { playSfx } from "@/lib/audio/sfx";
 
 // Лента событий («киллфид») — узнаваемый игровой HUD-элемент: вход/выход игроков
 // всплывают вверху справа и сами затухают. Берём чистые, надёжные события
@@ -51,8 +52,14 @@ export default function Killfeed() {
 
   useEffect(() => {
     const nameOf = (p: Participant) => p.name || p.identity;
-    const onConnected = (p: Participant) => push("login", "var(--live)", nameOf(p), "вошёл в комнату");
-    const onDisconnected = (p: Participant) => push("logout", "var(--text-mute)", nameOf(p), "вышел");
+    const onConnected = (p: Participant) => {
+      playSfx("peer-join");
+      push("login", "var(--live)", nameOf(p), "вошёл в комнату");
+    };
+    const onDisconnected = (p: Participant) => {
+      playSfx("peer-leave");
+      push("logout", "var(--text-mute)", nameOf(p), "вышел");
+    };
     room.on(RoomEvent.ParticipantConnected, onConnected);
     room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
     const timers = timersRef.current;

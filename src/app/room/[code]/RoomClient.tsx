@@ -46,6 +46,7 @@ import {
   takePassword,
 } from "@/lib/clientStorage";
 import { GainProcessor } from "@/lib/audio/gainProcessor";
+import { initSfx, playSfx, setSfxDeafened } from "@/lib/audio/sfx";
 import RoomAudio from "./RoomAudio";
 import SettingsModal from "./SettingsModal";
 import TacticsBoard from "./TacticsBoard";
@@ -330,7 +331,10 @@ function RoomView({
   const [removed, setRemoved] = useState(false);
   useEffect(() => {
     const onDisconnected = (reason?: DisconnectReason) => {
-      if (reason === DisconnectReason.PARTICIPANT_REMOVED) setRemoved(true);
+      if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
+        playSfx("kicked", { urgent: true });
+        setRemoved(true);
+      }
     };
     room.on(RoomEvent.Disconnected, onDisconnected);
     return () => {
@@ -374,6 +378,69 @@ function RoomView({
       claimingRef.current = false;
     });
   }, [participants, hostIdentity, localParticipant.identity, graceOver, code, token]);
+
+  // --- Звуки интерфейса (sfx) ---
+  // Свои действия озвучиваются в местах вызова (см. toggleMic и т.п.), а
+  // состояния (связь, модерация, права) — здесь, по переходам через ref.
+  // Предзагрузка буферов и синхронизация настроек — один раз при входе.
+  useEffect(() => {
+    initSfx();
+  }, []);
+  // «Заглушить всё» гасит бытовые звуки (но не тревоги) — сообщаем модулю.
+  useEffect(() => {
+    setSfxDeafened(deafened);
+  }, [deafened]);
+  // Вошёл в комнату — один раз при первом успешном подключении.
+  const enteredRef = useRef(false);
+  useEffect(() => {
+    if (state === ConnectionState.Connected && !enteredRef.current) {
+      enteredRef.current = true;
+      playSfx("enter");
+    }
+  }, [state]);
+  // Потеря / восстановление связи (тревога — звучит даже при «заглушить всё»).
+  const prevStateRef = useRef<ConnectionState | null>(null);
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    if (state === ConnectionState.Reconnecting && prev !== ConnectionState.Reconnecting) {
+      playSfx("reconnecting", { urgent: true });
+    } else if (state === ConnectionState.Connected && prev === ConnectionState.Reconnecting) {
+      playSfx("reconnected", { urgent: true });
+    }
+    prevStateRef.current = state;
+  }, [state]);
+  // Хост заглушил мой микрофон.
+  const prevForceMutedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevForceMutedRef.current === false && forceMutedMe) {
+      playSfx("force-muted", { urgent: true });
+    }
+    prevForceMutedRef.current = forceMutedMe;
+  }, [forceMutedMe]);
+  // Нет доступа к микрофону.
+  const prevMicDeniedRef = useRef(false);
+  useEffect(() => {
+    if (!prevMicDeniedRef.current && micDenied) playSfx("mic-denied", { urgent: true });
+    prevMicDeniedRef.current = micDenied;
+  }, [micDenied]);
+  // Ошибка действия модерации.
+  useEffect(() => {
+    if (modError) playSfx("mod-error", { urgent: true });
+  }, [modError]);
+  // Мне передали права хоста. Только после grace-периода — иначе звук сыграл бы
+  // на старте, пока метаданные/авто-передача устаканиваются (создатель — молча).
+  const prevAmHostRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevAmHostRef.current === false && amHost && graceOver) playSfx("host-granted");
+    prevAmHostRef.current = amHost;
+  }, [amHost, graceOver]);
+  // Комнату заперли / открыли (слышат все участники).
+  const prevLockedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const prev = prevLockedRef.current;
+    if (prev !== null && prev !== locked && graceOver) playSfx(locked ? "lock" : "unlock");
+    prevLockedRef.current = locked;
+  }, [locked, graceOver]);
 
   // Применяем сохранённые устройства один раз после подключения. Без exact —
   // если устройства уже нет, LiveKit спокойно падает на системное по умолчанию.
@@ -451,7 +518,34 @@ function RoomView({
   // Оба контентных блока ВСЕГДА смонтированы (прячем через CSS) — доска продолжает
   // принимать чужие рисунки в фоне и не теряет накопленное (см. TacticsBoard).
   const [view, setView] = useState<"room" | "screen" | "board">("room");
-  const toggleBoard = useCallback(() => setView((v) => (v === "board" ? "room" : "board")), []);
+  const toggleBoard = useCallback(() => {
+    const opening = view !== "board";
+    playSfx(opening ? "board-open" : "board-close");
+    setView(opening ? "board" : "room");
+  }, [view]);
+
+  // Озвученные обёртки своих действий: звук играем в месте нажатия (а не по
+  // смене состояния) — так не ловим ложных срабатываний на авто-публикацию
+  // микрофона при входе и авто-раскрытие экрана.
+  const toggleMic = useCallback(() => {
+    if (mic.pending || forceMutedMe) return;
+    playSfx(mic.enabled ? "mic-off" : "mic-on");
+    void mic.toggle();
+  }, [mic, forceMutedMe]);
+  const toggleScreen = useCallback(() => {
+    if (screen.pending) return;
+    setScreenError(false);
+    playSfx(screen.enabled ? "screen-stop" : "screen-start");
+    void screen.toggle();
+  }, [screen]);
+  const toggleDeafenWithSound = useCallback(() => {
+    playSfx(deafened ? "deafen-off" : "deafen-on");
+    onToggleDeafen();
+  }, [deafened, onToggleDeafen]);
+  const leaveWithSound = useCallback(() => {
+    playSfx("leave");
+    onLeave();
+  }, [onLeave]);
   // Демонстрация раскрывает центр сама: появилась шара (своя или чужая) — открываем
   // экран; пропала — возвращаемся к кружкам. Если открыта доска — её не трогаем.
   const screensActive = screens.length > 0;
@@ -489,21 +583,16 @@ function RoomView({
         return;
       switch (e.code) {
         case "KeyM":
-          if (!mic.pending && !forceMutedMe) {
-            e.preventDefault();
-            void mic.toggle();
-          }
+          e.preventDefault();
+          toggleMic();
           break;
         case "KeyD":
           e.preventDefault();
-          onToggleDeafen();
+          toggleDeafenWithSound();
           break;
         case "KeyS":
-          if (!screen.pending) {
-            e.preventDefault();
-            setScreenError(false);
-            void screen.toggle();
-          }
+          e.preventDefault();
+          toggleScreen();
           break;
         case "Digit2":
           e.preventDefault();
@@ -513,7 +602,7 @@ function RoomView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mic, forceMutedMe, onToggleDeafen, screen, toggleBoard]);
+  }, [toggleMic, toggleDeafenWithSound, toggleScreen, toggleBoard]);
 
   // Хост удалил нас из комнаты — отдельный экран с понятной причиной.
   if (removed) {
@@ -620,15 +709,12 @@ function RoomView({
         micEnabled={mic.enabled}
         micPending={mic.pending}
         forceMutedMe={forceMutedMe}
-        onMic={() => void mic.toggle()}
+        onMic={toggleMic}
         deafened={deafened}
-        onToggleDeafen={onToggleDeafen}
+        onToggleDeafen={toggleDeafenWithSound}
         screenEnabled={screen.enabled}
         screenPending={screen.pending}
-        onScreen={() => {
-          setScreenError(false);
-          void screen.toggle();
-        }}
+        onScreen={toggleScreen}
         boardOpen={view === "board"}
         onToggleBoard={toggleBoard}
         amHost={amHost}
@@ -637,7 +723,7 @@ function RoomView({
         hasHostKey={hasHostKey}
         onReturnHost={() => void doModerate("transfer", localParticipant.identity)}
         onOpenSettings={() => setSettingsOpen(true)}
-        onLeave={onLeave}
+        onLeave={leaveWithSound}
       />
 
       {menu && (

@@ -14,6 +14,8 @@ const AUDIO_INPUT_GAIN_KEY = "gr.audio.inputGain";
 const AUDIO_MASTER_VOLUME_KEY = "gr.audio.masterVolume";
 const AUDIO_VOLUMES_KEY = "gr.audio.volumes";
 const AUDIO_MUTES_KEY = "gr.audio.mutes";
+const SFX_ENABLED_KEY = "gr.sfx.enabled";
+const SFX_VOLUME_KEY = "gr.sfx.volume";
 
 /**
  * Безопасный доступ к Web Storage. В некоторых браузерах (Safari «блокировать
@@ -144,6 +146,24 @@ export function getMasterVolume(): number {
 }
 export function setMasterVolume(value: number): void {
   writeString(AUDIO_MASTER_VOLUME_KEY, String(value));
+}
+
+/**
+ * Звуки интерфейса (клики, вход/выход, тревоги). Вкл по умолчанию; громкость
+ * 0..1 (дефолт 0.6 — заметно тише голоса). Источник правды для модуля sfx.ts.
+ */
+export function getSfxEnabled(): boolean {
+  const raw = safeGet(local, SFX_ENABLED_KEY);
+  return raw === null ? true : raw === "1";
+}
+export function setSfxEnabled(value: boolean): void {
+  writeString(SFX_ENABLED_KEY, value ? "1" : "0");
+}
+export function getSfxVolume(): number {
+  return readNumber(SFX_VOLUME_KEY, 0.6);
+}
+export function setSfxVolume(value: number): void {
+  writeString(SFX_VOLUME_KEY, String(value));
 }
 
 function readMap<T>(key: string): Record<string, T> {

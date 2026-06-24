@@ -28,6 +28,7 @@ import {
 } from "@/lib/clientStorage";
 import Banner from "@/components/Banner";
 import Icon from "@/components/Icon";
+import { playSfx } from "@/lib/audio/sfx";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
 // а в штрихе храним долю (px / NOMINAL_WIDTH). При рисовании доля умножается на
@@ -511,6 +512,7 @@ export default function TacticsBoard({
     strokesRef.current = [];
     activeRef.current = null;
     redraw();
+    playSfx("board-clear");
     broadcast({ t: "clear", epoch: epochRef.current });
   }
   function setBackground(url: string | null) {

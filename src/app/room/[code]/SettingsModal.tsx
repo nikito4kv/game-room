@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useMediaDeviceSelect } from "@livekit/components-react";
 import { supportsAudioOutputSelection } from "livekit-client";
-import { setInputDevice, setOutputDevice } from "@/lib/clientStorage";
+import { getSfxEnabled, getSfxVolume, setInputDevice, setOutputDevice } from "@/lib/clientStorage";
+import { playSfx, setSfxEnabled, setSfxVolume } from "@/lib/audio/sfx";
 import { startMicTest, type MicTest } from "@/lib/audio/micTest";
 import Icon from "@/components/Icon";
 
@@ -32,6 +33,11 @@ export default function SettingsModal({
   const micSel = useMediaDeviceSelect({ kind: "audioinput", requestPermissions: true });
   const spkSel = useMediaDeviceSelect({ kind: "audiooutput" });
   const canPickOutput = supportsAudioOutputSelection();
+
+  // Звуки интерфейса: своё локальное состояние, источник правды — localStorage.
+  // Сеттеры из sfx.ts сразу и персистят, и обновляют горячую копию в модуле.
+  const [sfxOn, setSfxOn] = useState(getSfxEnabled);
+  const [sfxVol, setSfxVol] = useState(getSfxVolume);
 
   // Закрытие по Esc.
   useEffect(() => {
@@ -140,6 +146,43 @@ export default function SettingsModal({
           <p className="text-xs text-text-mute">
             Громкость каждого участника отдельно настраивается в списке отряда.
           </p>
+        </section>
+
+        {/* ── Звуки интерфейса ─────────────────────────────────── */}
+        <section className="flex flex-col gap-3">
+          <h3 className="panel-h flex items-center gap-2">
+            <Icon name="volume" size={15} /> Звуки интерфейса
+          </h3>
+
+          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-text-dim">
+            <span>Клики, вход/выход, уведомления</span>
+            <input
+              type="checkbox"
+              checked={sfxOn}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setSfxOn(on);
+                setSfxEnabled(on);
+                if (on) playSfx("mic-on", { urgent: true }); // короткий предпросмотр
+              }}
+            />
+          </label>
+
+          {sfxOn && (
+            <Slider
+              label="Громкость звуков"
+              value={Math.round(sfxVol * 100)}
+              min={0}
+              max={100}
+              onChange={(v) => {
+                const vol = v / 100;
+                setSfxVol(vol);
+                setSfxVolume(vol);
+                playSfx("mic-on", { urgent: true }); // слышно выбранный уровень
+              }}
+              suffix="%"
+            />
+          )}
         </section>
       </div>
     </div>
