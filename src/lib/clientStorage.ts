@@ -11,6 +11,7 @@ const BOARD_SIZE_KEY = "gr.board.size";
 const AUDIO_INPUT_DEVICE_KEY = "gr.audio.inputDevice";
 const AUDIO_OUTPUT_DEVICE_KEY = "gr.audio.outputDevice";
 const AUDIO_INPUT_GAIN_KEY = "gr.audio.inputGain";
+const AUDIO_NOISE_SUPPRESSION_KEY = "gr.audio.noiseSuppression";
 const AUDIO_MASTER_VOLUME_KEY = "gr.audio.masterVolume";
 const AUDIO_VOLUMES_KEY = "gr.audio.volumes";
 const AUDIO_MUTES_KEY = "gr.audio.mutes";
@@ -138,6 +139,18 @@ export function getInputGain(): number {
 }
 export function setInputGain(value: number): void {
   writeString(AUDIO_INPUT_GAIN_KEY, String(value));
+}
+
+/**
+ * Шумоподавление микрофона (RNNoise + noise gate). Включено по умолчанию —
+ * давит дыхание, клавиатуру и фоновый шум. Источник правды для MicProcessor.
+ */
+export function getNoiseSuppression(): boolean {
+  const raw = safeGet(local, AUDIO_NOISE_SUPPRESSION_KEY);
+  return raw === null ? true : raw === "1";
+}
+export function setNoiseSuppression(value: boolean): void {
+  writeString(AUDIO_NOISE_SUPPRESSION_KEY, value ? "1" : "0");
 }
 
 /** Общая громкость приёма: 1 = 100%, диапазон 0..1. */

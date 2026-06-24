@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/sync-noise-suppressor.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/sync-noise-suppressor.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -12,6 +14,7 @@
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.21",
+    "@sapphi-red/web-noise-suppressor": "^0.3.5",
     "@upstash/ratelimit": "^2.0.5",
     "@upstash/redis": "^1.34.3",
     "@vercel/blob": "^2.4.1",

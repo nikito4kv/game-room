@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# generated runtime assets (синхронизируются из node_modules перед dev/build)
+/public/noise-suppressor/
+
 # production
 /build
 

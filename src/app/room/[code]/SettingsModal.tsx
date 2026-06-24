@@ -21,12 +21,16 @@ export default function SettingsModal({
   onChangeMasterVolume,
   inputGain,
   onChangeInputGain,
+  noiseSuppression,
+  onChangeNoiseSuppression,
 }: {
   onClose: () => void;
   masterVolume: number;
   onChangeMasterVolume: (v: number) => void;
   inputGain: number;
   onChangeInputGain: (v: number) => void;
+  noiseSuppression: boolean;
+  onChangeNoiseSuppression: (on: boolean) => void;
 }) {
   // requestPermissions:true — чтобы получить названия устройств (в комнате доступ
   // к микрофону уже есть, повторного запроса не будет).
@@ -100,6 +104,20 @@ export default function SettingsModal({
             onChange={(v) => onChangeInputGain(v / 100)}
             suffix="%"
           />
+
+          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-text-dim">
+            <span>
+              Шумоподавление
+              <span className="block text-xs text-text-mute">
+                Убирает дыхание, клавиатуру и фоновый шум
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={noiseSuppression}
+              onChange={(e) => onChangeNoiseSuppression(e.target.checked)}
+            />
+          </label>
 
           <MicTester deviceId={micSel.activeDeviceId} gain={inputGain} />
         </section>

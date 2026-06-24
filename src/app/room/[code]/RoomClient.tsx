@@ -34,6 +34,7 @@ import {
   getInputDevice,
   getInputGain,
   getMasterVolume,
+  getNoiseSuppression,
   getOutputDevice,
   getNickname,
   getParticipantMutes,
@@ -41,11 +42,12 @@ import {
   setInputGain,
   setMasterVolume,
   setNickname as saveNickname,
+  setNoiseSuppression,
   setParticipantMute,
   setParticipantVolume,
   takePassword,
 } from "@/lib/clientStorage";
-import { GainProcessor } from "@/lib/audio/gainProcessor";
+import { MicProcessor } from "@/lib/audio/micProcessor";
 import { initSfx, playSfx, setSfxDeafened } from "@/lib/audio/sfx";
 import RoomAudio from "./RoomAudio";
 import SettingsModal from "./SettingsModal";
@@ -466,28 +468,52 @@ function RoomView({
   // Окно настроек звука (шестерёнка в шапке).
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Усиление своего микрофона. Процессор создаём один раз (ленивый init), меняем
-  // gain вживую без переиздания трека.
+  // Обработка своего микрофона: усиление + шумоподавление (RNNoise). Процессор
+  // создаём один раз (ленивый init), и gain, и шумодав меняем вживую без
+  // переиздания трека.
   const [inputGain, setInputGainState] = useState(1);
-  const [gainProcessor] = useState(() => new GainProcessor(getInputGain()));
+  const [noiseSuppression, setNoiseSuppressionState] = useState(true);
+  const [micProcessor] = useState(
+    () =>
+      // Колбэк отдаёт UI/localStorage фактическое состояние шумодава (например,
+      // если RNNoise не загрузился) — чинит «залипание» тумблера и гонку кликов.
+      new MicProcessor(getInputGain(), getNoiseSuppression(), (on) => {
+        setNoiseSuppressionState(on);
+        setNoiseSuppression(on);
+      }),
+  );
   // Какой именно микрофон-трек уже обработан — чтобы не вешать процессор дважды.
   const processedSidRef = useRef<string | null>(null);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое чтение localStorage
     setInputGainState(getInputGain());
+    setNoiseSuppressionState(getNoiseSuppression());
   }, []);
 
   const changeInputGain = useCallback(
     (v: number) => {
       setInputGainState(v);
       setInputGain(v);
-      gainProcessor.setGain(v);
+      micProcessor.setGain(v);
     },
-    [gainProcessor],
+    [micProcessor],
   );
 
-  // Навешиваем GainProcessor на локальный микрофон после публикации. Идемпотентно
+  const changeNoiseSuppression = useCallback(
+    (on: boolean) => {
+      // Оптимистично переключаем UI; фактическое состояние (в т.ч. если RNNoise не
+      // загрузился) вернёт колбэк onNoiseSuppressionChange ниже — он же чинит гонку
+      // быстрых кликов (побеждает последняя завершившаяся операция, а не последняя
+      // разрешившаяся вручную).
+      setNoiseSuppressionState(on);
+      setNoiseSuppression(on);
+      void micProcessor.setNoiseSuppression(on);
+    },
+    [micProcessor],
+  );
+
+  // Навешиваем MicProcessor на локальный микрофон после публикации. Идемпотентно
   // через processedSidRef (повторная публикация / dev StrictMode не дублируют).
   useEffect(() => {
     if (!mic.enabled) return;
@@ -496,12 +522,13 @@ function RoomView({
     if (!track || !pub) return;
     if (processedSidRef.current === pub.trackSid) return;
     processedSidRef.current = pub.trackSid;
-    gainProcessor.setGain(inputGain);
-    void track.setProcessor(gainProcessor).catch(() => {
+    // Усиление процессор уже знает (из конструктора + живых changeInputGain) —
+    // повторно выставлять здесь не нужно, поэтому inputGain не в зависимостях.
+    void track.setProcessor(micProcessor).catch(() => {
       // setProcessor @experimental — при сбое остаёмся на «чистом» микрофоне
       processedSidRef.current = null;
     });
-  }, [mic.enabled, localParticipant, inputGain, gainProcessor]);
+  }, [mic.enabled, localParticipant, micProcessor]);
   // Кнопка демонстрации экрана. Звук вкладки/системы захватываем вместе с
   // картинкой (audio: true) — браузер сам покажет галочку «поделиться звуком».
   const [screenError, setScreenError] = useState(false);
@@ -657,6 +684,8 @@ function RoomView({
           onChangeMasterVolume={onChangeMasterVolume}
           inputGain={inputGain}
           onChangeInputGain={changeInputGain}
+          noiseSuppression={noiseSuppression}
+          onChangeNoiseSuppression={changeNoiseSuppression}
         />
       )}
 
