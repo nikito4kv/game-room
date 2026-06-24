@@ -2,7 +2,12 @@
 // Секреты LiveKit не должны попадать в клиентские компоненты.
 import { randomInt, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { AccessToken, RoomServiceClient, WebhookReceiver } from "livekit-server-sdk";
+import {
+  AccessToken,
+  RoomServiceClient,
+  TokenVerifier,
+  WebhookReceiver,
+} from "livekit-server-sdk";
 
 /**
  * Серверные хелперы для работы с LiveKit.
@@ -44,6 +49,22 @@ export type RoomMeta = {
    */
   hostKeyHash: string;
   createdAt: number;
+  /**
+   * Ники, забаненные на время жизни комнаты (Этап 5). Их не пускаем обратно.
+   * Бан — в пределах сессии: после удаления комнаты список исчезает.
+   */
+  banned?: string[];
+  /**
+   * Комната закрыта для НОВЫХ участников (замок). Существующие могут
+   * переподключаться; новые ники — нет. Закрывает обход бана сменой ника.
+   */
+  locked?: boolean;
+  /**
+   * Ники, которые уже были в комнате. Нужно, чтобы при замке свой участник мог
+   * вернуться после перезагрузки (а новый — нет). Не путать с правами: членство
+   * не даёт ничего, кроме права переподключиться в закрытую комнату.
+   */
+  members?: string[];
 };
 
 let _roomService: RoomServiceClient | null = null;
@@ -71,6 +92,52 @@ export function getWebhookReceiver(): WebhookReceiver {
     );
   }
   return _webhookReceiver;
+}
+
+let _tokenVerifier: TokenVerifier | null = null;
+
+/** Ленивый верификатор JWT-токенов (та же пара ключей). */
+function getTokenVerifier(): TokenVerifier {
+  if (!_tokenVerifier) {
+    _tokenVerifier = new TokenVerifier(
+      requireEnv("LIVEKIT_API_KEY"),
+      requireEnv("LIVEKIT_API_SECRET"),
+    );
+  }
+  return _tokenVerifier;
+}
+
+/**
+ * Проверяет подпись LiveKit-токена и возвращает подтверждённый ник (identity),
+ * если токен валиден и выдан для ЭТОЙ комнаты. Иначе null. Так модераторские
+ * запросы доказывают «я — этот участник», и выдать себя за другого нельзя
+ * (LiveKit гарантирует уникальность identity в комнате).
+ */
+export async function verifyTokenIdentity(
+  token: string,
+  code: string,
+): Promise<string | null> {
+  try {
+    const claims = await getTokenVerifier().verify(token);
+    const identity = claims.sub;
+    if (!identity || claims.video?.room !== code) return null;
+    return identity;
+  } catch {
+    return null;
+  }
+}
+
+/** Читает и парсит метаданные комнаты. null — комнаты нет или метаданных нет. */
+export async function loadRoomMeta(code: string): Promise<RoomMeta | null> {
+  const rooms = await getRoomService().listRooms([code]);
+  const room = rooms[0];
+  if (!room?.metadata) return null;
+  return JSON.parse(room.metadata) as RoomMeta;
+}
+
+/** Перезаписывает метаданные комнаты целиком (read-modify-write на вызывающем). */
+export async function saveRoomMeta(code: string, meta: RoomMeta): Promise<void> {
+  await getRoomService().updateRoomMetadata(code, JSON.stringify(meta));
 }
 
 // Алфавит без похожих символов (нет 0/O, 1/I/L) — код проще диктовать друзьям.

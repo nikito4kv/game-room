@@ -3,6 +3,8 @@ import {
   createAccessToken,
   getRoomService,
   getServerUrl,
+  loadRoomMeta,
+  saveRoomMeta,
   verifyPassword,
   type RoomMeta,
 } from "@/lib/livekit";
@@ -72,22 +74,49 @@ export async function POST(request: Request) {
     }
   }
 
-  // 2. Проверка пароля (если задан).
+  // 2. Права хоста подтверждаются секретом. НО обход бана/замка даём только
+  // ДЕЙСТВУЮЩЕМУ хосту (ник совпадает с hostIdentity), а не любому, у кого в
+  // localStorage лежит ключ. Иначе вторая вкладка того же браузера, где
+  // создавали комнату, подхватывала бы ключ и обходила и бан, и замок.
+  const isHost = Boolean(
+    hostKey && meta?.hostKeyHash && (await verifyPassword(hostKey, meta.hostKeyHash)),
+  );
+  const isCurrentHost = isHost && !!meta && nickname === meta.hostIdentity;
+
+  // 3. Бан (Этап 5): забаненный ник не пускаем. Действующего хоста — нельзя.
+  if (!isCurrentHost && meta?.banned?.includes(nickname)) {
+    return NextResponse.json(
+      { error: "Вас забанили в этой комнате" },
+      { status: 403 },
+    );
+  }
+
+  // 4. Проверка пароля (если задан).
   if (meta?.passwordHash) {
     if (!password || !(await verifyPassword(password, meta.passwordHash))) {
       return NextResponse.json({ error: "Неверный пароль" }, { status: 401 });
     }
   }
 
-  // 3. Ник не занят в этой комнате? Проверку не глотаем: если её нельзя
+  // 5. Ник не занят + замок комнаты. Проверку не глотаем: если её нельзя
   // выполнить, безопаснее отказать, чем пустить дубль (LiveKit отключит
   // существующего участника с тем же ником).
   try {
     const participants = await service.listParticipants(code);
-    if (participants.some((p) => p.identity === nickname)) {
+    const alreadyHere = participants.some((p) => p.identity === nickname);
+    if (alreadyHere) {
       return NextResponse.json(
         { error: "Этот ник уже занят в комнате — выберите другой" },
         { status: 409 },
+      );
+    }
+    // Замок: новых участников не пускаем. Свои (кто уже был в комнате) и
+    // действующий хост могут вернуться, например после перезагрузки.
+    const wasMember = !!meta?.members?.includes(nickname);
+    if (meta?.locked && !isCurrentHost && !wasMember) {
+      return NextResponse.json(
+        { error: "Комната закрыта для новых участников" },
+        { status: 403 },
       );
     }
   } catch (err) {
@@ -98,13 +127,21 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. Права хоста подтверждаются секретом, а не ником.
-  const isHost = Boolean(
-    hostKey && meta?.hostKeyHash && (await verifyPassword(hostKey, meta.hostKeyHash)),
-  );
-
-  // 5. Выдаём токен.
+  // 6. Выдаём токен.
   const token = await createAccessToken({ room: code, identity: nickname, isHost });
+
+  // Запоминаем ник как участника (best-effort), чтобы при замке он мог вернуться
+  // после перезагрузки. Перечитываем свежие метаданные прямо перед записью, чтобы
+  // не затереть только что выставленный бан/замок другим запросом.
+  try {
+    const fresh = await loadRoomMeta(code);
+    if (fresh && !fresh.members?.includes(nickname)) {
+      fresh.members = [...(fresh.members ?? []), nickname];
+      await saveRoomMeta(code, fresh);
+    }
+  } catch {
+    // не критично — членство нужно только для реконнекта в закрытую комнату
+  }
 
   return NextResponse.json({
     token,
