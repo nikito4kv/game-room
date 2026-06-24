@@ -10,7 +10,16 @@ import { saveSecret, type RoomSecret } from "@/lib/roomSecret";
 import { clientIp, createRoomLimit, rateLimited } from "@/lib/ratelimit";
 
 const MAX_PARTICIPANTS = 6; // целевой максимум из SPEC (2–6)
-const EMPTY_TIMEOUT_SEC = 5 * 60; // комната живёт 5 мин без участников (авто-удаление — Этап 5)
+// Авто-закрытие комнаты (SPEC: удаляется, когда вышел последний участник).
+// В LiveKit это ДВА разных таймаута:
+//  - emptyTimeout — сколько держать комнату, пока в неё ещё НИКТО не зашёл
+//    (хост создал, но не подключился / разрешает доступ к микрофону).
+//  - departureTimeout — сколько держать комнату ПОСЛЕ ухода последнего участника.
+// Основной сценарий «поиграли и все вышли» — это departureTimeout; без него
+// сработал бы короткий дефолт LiveKit (~20 с), и перезагрузка/обрыв связи убивали
+// бы комнату вместе с картами и секретом до того, как участник переподключится.
+const EMPTY_TIMEOUT_SEC = 2 * 60; // создал, но ещё никто не зашёл
+const DEPARTURE_TIMEOUT_SEC = 90; // все вышли → отсрочка на реконнект
 
 // Серверные лимиты (клиентский maxLength легко обойти прямым запросом).
 const MAX_NICK_LEN = 24;
@@ -79,6 +88,7 @@ export async function POST(request: Request) {
       name: code,
       metadata: JSON.stringify(meta),
       emptyTimeout: EMPTY_TIMEOUT_SEC,
+      departureTimeout: DEPARTURE_TIMEOUT_SEC,
       maxParticipants: MAX_PARTICIPANTS,
     });
     // Секрет пишем после создания комнаты — чтобы не плодить осиротевшие записи.
