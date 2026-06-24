@@ -6,89 +6,42 @@ import { getRedis } from "./redis";
 
 // Скользящее окно. Лимитеры ленивые: создаём при первом обращении, чтобы не
 // дёргать env (через getRedis) на этапе сборки.
-let _token: Ratelimit | null = null;
-let _tokenCodeFail: Ratelimit | null = null;
-let _createRoom: Ratelimit | null = null;
-let _listRooms: Ratelimit | null = null;
-let _moderate: Ratelimit | null = null;
-let _upload: Ratelimit | null = null;
+// Один фабричный helper вместо шести почти одинаковых синглтонов. Инстанс
+// создаётся лениво при первом вызове (env через getRedis не дёргается на сборке).
+type LimitWindow = Parameters<typeof Ratelimit.slidingWindow>[1];
+function lazyLimiter(tokens: number, window: LimitWindow, prefix: string): () => Ratelimit {
+  let inst: Ratelimit | null = null;
+  return () =>
+    (inst ??= new Ratelimit({
+      redis: getRedis(),
+      limiter: Ratelimit.slidingWindow(tokens, window),
+      prefix,
+    }));
+}
 
 /** Вход в комнату: ключ IP:CODE — против перебора пароля и кодов комнат. */
-export function tokenLimit(): Ratelimit {
-  if (!_token) {
-    _token = new Ratelimit({
-      redis: getRedis(),
-      limiter: Ratelimit.slidingWindow(10, "1 m"),
-      prefix: "rl:token",
-    });
-  }
-  return _token;
-}
+export const tokenLimit = lazyLimiter(10, "1 m", "rl:token");
 
 /**
  * Глобальный лимит НЕУДАЧНЫХ попыток пароля на КОМНАТУ (ключ — код, поверх
  * IP+CODE-лимита). Код публичной комнаты виден в витрине, поэтому per-IP-лимит
  * обходится ротацией IP; счётчик по коду гасит распределённый перебор. Списываем
- * ТОЛЬКО при неверном пароле — верный вход лимитер не трогает, легитимных не бьёт.
+ * ТОЛЬКО при неверном пароле — верный вход лимитер не трогает. Осознанный
+ * trade-off: во время активной атаки опечатавшийся в пароле тоже словит 429.
  */
-export function tokenCodeFailLimit(): Ratelimit {
-  if (!_tokenCodeFail) {
-    _tokenCodeFail = new Ratelimit({
-      redis: getRedis(),
-      limiter: Ratelimit.slidingWindow(20, "10 m"),
-      prefix: "rl:tokenFail",
-    });
-  }
-  return _tokenCodeFail;
-}
+export const tokenCodeFailLimit = lazyLimiter(20, "10 m", "rl:tokenFail");
 
 /** Создание комнат: ключ IP — против спама комнат. */
-export function createRoomLimit(): Ratelimit {
-  if (!_createRoom) {
-    _createRoom = new Ratelimit({
-      redis: getRedis(),
-      limiter: Ratelimit.slidingWindow(5, "1 m"),
-      prefix: "rl:createRoom",
-    });
-  }
-  return _createRoom;
-}
+export const createRoomLimit = lazyLimiter(5, "1 m", "rl:createRoom");
 
 /** Листинг публичных комнат: ключ IP — умеренный лимит для витрины. */
-export function listRoomsLimit(): Ratelimit {
-  if (!_listRooms) {
-    _listRooms = new Ratelimit({
-      redis: getRedis(),
-      limiter: Ratelimit.slidingWindow(30, "1 m"),
-      prefix: "rl:listRooms",
-    });
-  }
-  return _listRooms;
-}
+export const listRoomsLimit = lazyLimiter(30, "1 m", "rl:listRooms");
 
 /** Модерация: ключ IP — умеренный лимит. */
-export function moderateLimit(): Ratelimit {
-  if (!_moderate) {
-    _moderate = new Ratelimit({
-      redis: getRedis(),
-      limiter: Ratelimit.slidingWindow(30, "1 m"),
-      prefix: "rl:moderate",
-    });
-  }
-  return _moderate;
-}
+export const moderateLimit = lazyLimiter(30, "1 m", "rl:moderate");
 
 /** Загрузка карт: ключ IP — умеренный лимит. */
-export function uploadLimit(): Ratelimit {
-  if (!_upload) {
-    _upload = new Ratelimit({
-      redis: getRedis(),
-      limiter: Ratelimit.slidingWindow(20, "1 m"),
-      prefix: "rl:upload",
-    });
-  }
-  return _upload;
-}
+export const uploadLimit = lazyLimiter(20, "1 m", "rl:upload");
 
 /**
  * IP клиента для rate limiting. На Vercel `x-real-ip` выставляет САМА платформа

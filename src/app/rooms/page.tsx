@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Banner from "@/components/Banner";
 import Icon, { type IconName } from "@/components/Icon";
+import { plural } from "@/lib/plural";
 import type { PublicRoomSummary } from "@/lib/publicRooms";
 
 type StatusFilter = "all" | "open" | "password" | "locked";
@@ -15,15 +16,6 @@ const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "password", label: "С паролем" },
   { value: "locked", label: "Закрытые" },
 ];
-
-// Множественное число для счётчика участников (как plural в RoomClient).
-function plural(n: number, forms: [string, string, string]): string {
-  const n10 = n % 10;
-  const n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return forms[0];
-  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return forms[1];
-  return forms[2];
-}
 
 // Статус-иконка комнаты: открытая (зелёный замок) / с паролем (жёлтый) /
 // закрытая (перечёркнутый круг, не кликабельна).
@@ -49,8 +41,15 @@ export default function PublicRooms() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
+  // Кулдаун обновления: ответ из 5-сек серверного кэша приходит мгновенно, без
+  // паузы кнопка/возврат на вкладку легко выбили бы лимит 30/мин (429). Ref —
+  // чтобы guard в мемоизированном load читал актуальное значение, не из замыкания.
+  const [cooldown, setCooldown] = useState(false);
+  const cooldownRef = useRef(false);
+  const cooldownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
+    if (!force && cooldownRef.current) return;
     setLoading(true);
     setError(null);
     try {
@@ -65,12 +64,32 @@ export default function PublicRooms() {
       setError("Сеть недоступна. Попробуйте ещё раз.");
     } finally {
       setLoading(false);
+      cooldownRef.current = true;
+      setCooldown(true);
+      if (cooldownTimer.current) clearTimeout(cooldownTimer.current);
+      cooldownTimer.current = setTimeout(() => {
+        cooldownRef.current = false;
+        setCooldown(false);
+      }, 3000);
     }
   }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовая загрузка списка при монтировании
-    void load();
+    void load(true);
+    return () => {
+      if (cooldownTimer.current) clearTimeout(cooldownTimer.current);
+    };
+  }, [load]);
+
+  // Ревалидация при возврате на вкладку — список «живой» без поллинга; guard
+  // кулдауна не даёт частить при флаппинге фокуса.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") void load();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load]);
 
   const visible = useMemo(() => {
@@ -79,7 +98,7 @@ export default function PublicRooms() {
       if (filter === "open" && (r.locked || r.hasPassword)) return false;
       if (filter === "password" && (r.locked || !r.hasPassword)) return false;
       if (filter === "locked" && !r.locked) return false;
-      if (q && !r.title.toLowerCase().includes(q) && !r.code.toLowerCase().includes(q)) {
+      if (q && !(r.title ?? "").toLowerCase().includes(q) && !(r.code ?? "").toLowerCase().includes(q)) {
         return false;
       }
       return true;
@@ -89,7 +108,7 @@ export default function PublicRooms() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-16">
       <header className="rise flex flex-col gap-3">
-        <Link href="/" className="chip chip--copy self-start">
+        <Link href="/" className="btn btn--ghost btn--sm self-start">
           <Icon name="login" size={14} className="rotate-180" /> На главную
         </Link>
         <h1 className="font-display text-3xl font-bold tracking-tight">
@@ -128,7 +147,7 @@ export default function PublicRooms() {
         <button
           type="button"
           onClick={() => void load()}
-          disabled={loading}
+          disabled={loading || cooldown}
           className="btn btn--icon"
           aria-label="Обновить список"
           title="Обновить"
@@ -200,7 +219,6 @@ export default function PublicRooms() {
                   </button>
                 ) : (
                   <div
-                    aria-disabled
                     className={`${baseClass} cursor-not-allowed opacity-60`}
                     style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
                   >

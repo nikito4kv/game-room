@@ -55,6 +55,7 @@ import TacticsBoard from "./TacticsBoard";
 import Killfeed from "./Killfeed";
 import Banner from "@/components/Banner";
 import Icon, { type IconName } from "@/components/Icon";
+import { plural } from "@/lib/plural";
 
 type JoinInfo = { token: string; serverUrl: string; title: string; isHost: boolean };
 
@@ -113,9 +114,15 @@ export default function RoomClient({ code }: { code: string }) {
     setParticipantMute(identity, muted);
   }, []);
 
+  // Парольная комната: на 401 показываем поле ввода пароля, а не тупик-ошибку.
+  const [needPassword, setNeedPassword] = useState(false);
+  const [pwInput, setPwInput] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState(false);
+
   const requestToken = useCallback(
-    async (nick: string) => {
-      const password = takePassword(code);
+    async (nick: string, passwordOverride?: string) => {
+      const password = passwordOverride ?? takePassword(code);
       const hostKey = getHostKey(code);
       try {
         const res = await fetch("/api/token", {
@@ -124,12 +131,22 @@ export default function RoomClient({ code }: { code: string }) {
           body: JSON.stringify({ code, nickname: nick, password, hostKey }),
         });
         const data = await res.json();
+        if (res.status === 401) {
+          // Нужен пароль (или он неверный) — показываем ввод, а не тупик. «Неверный»
+          // помечаем, только если пароль реально пробовали (введён вручную или
+          // стащён из sessionStorage), а не при первом авто-входе без него.
+          setPwError(passwordOverride != null || password != null);
+          setNeedPassword(true);
+          return;
+        }
         if (!res.ok) {
+          setNeedPassword(false);
           setError(data.error ?? "Не удалось войти в комнату");
           return;
         }
         // Пароль больше не нужен — стираем, чтобы не лежал в sessionStorage.
         clearPassword(code);
+        setNeedPassword(false);
         setJoin(data as JoinInfo);
       } catch {
         setError("Сеть недоступна. Попробуйте ещё раз.");
@@ -152,6 +169,16 @@ export default function RoomClient({ code }: { code: string }) {
     setNickname(nick);
   }
 
+  async function handlePwSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const pw = pwInput.trim();
+    if (!pw || pwBusy || !nickname) return;
+    setPwBusy(true);
+    setPwError(false);
+    await requestToken(nickname, pw);
+    setPwBusy(false);
+  }
+
   // Нет ника (зашли по прямой ссылке) — спросим его.
   if (!nickname) {
     return (
@@ -169,6 +196,32 @@ export default function RoomClient({ code }: { code: string }) {
           <button type="submit" className="btn btn--primary btn--block">
             <Icon name="login" />
             Войти
+          </button>
+        </form>
+      </CenteredCard>
+    );
+  }
+
+  if (needPassword) {
+    return (
+      <CenteredCard title={`Комната ${code}`}>
+        <form onSubmit={handlePwSubmit} className="flex flex-col gap-3">
+          <p className="text-sm text-text-dim">Эта комната защищена паролем.</p>
+          {pwError && <Banner tone="error">Неверный пароль. Попробуйте снова.</Banner>}
+          <input
+            type="password"
+            value={pwInput}
+            onChange={(e) => setPwInput(e.target.value)}
+            placeholder="Пароль"
+            autoFocus
+            className="field"
+          />
+          <button type="submit" disabled={pwBusy} className="btn btn--primary btn--block">
+            <Icon name="login" />
+            {pwBusy ? "Входим…" : "Войти"}
+          </button>
+          <button type="button" onClick={() => router.push("/")} className="btn btn--block">
+            На главную
           </button>
         </form>
       </CenteredCard>
@@ -1378,15 +1431,6 @@ function initials(s: string): string {
   if (parts.length === 0) return "??";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
-}
-
-/** Русское склонение по числу: [1, 2–4, 5+]. */
-function plural(n: number, forms: [string, string, string]): string {
-  const n10 = n % 10;
-  const n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return forms[0];
-  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return forms[1];
-  return forms[2];
 }
 
 function CenteredCard({
