@@ -68,14 +68,13 @@ import Killfeed from "./Killfeed";
 import Banner from "@/components/Banner";
 import Icon, { type IconName } from "@/components/Icon";
 import { plural } from "@/lib/plural";
+import { buildRoomOptions, SCREEN_SHARE_CAPTURE } from "@/lib/screenShare";
 
 type JoinInfo = { token: string; serverUrl: string; title: string; isHost: boolean };
 
-// webAudioMix пускает приём звука через общий AudioContext. Это нужно, чтобы
-// громкость участника можно было поднимать ВЫШE 100% (через gain), иначе LiveKit
-// выставляет HTMLMediaElement.volume напрямую и значение >1 роняет ошибку.
-// Объект вынесен из компонента — стабильная ссылка, чтобы Room не пересоздавался.
-const ROOM_OPTIONS = { webAudioMix: true } as const;
+// Опции комнаты (включая профиль демонстрации экрана и выбор кодека под ОС) живут
+// в @/lib/screenShare → buildRoomOptions(). Строятся на клиенте через useMemo(…, [])
+// ниже — один раз, со стабильной ссылкой, иначе LiveKit пересоздаёт Room.
 
 // Курсор в поле ввода — горячие клавиши не перехватываем (печатаем текст).
 function isTypingTarget(t: EventTarget | null): boolean {
@@ -101,6 +100,9 @@ function useLatestRef<T>(value: T) {
 
 export default function RoomClient({ code }: { code: string }) {
   const router = useRouter();
+  // Зависит от navigator (кодек под ОС) → считаем один раз на клиенте.
+  // Пустые зависимости обязательны: стабильная ссылка не даёт LiveKit пересоздавать Room.
+  const roomOptions = useMemo(() => buildRoomOptions(), []);
   const [nickname, setNickname] = useState<string | null>(null);
   const [nickInput, setNickInput] = useState("");
   const [join, setJoin] = useState<JoinInfo | null>(null);
@@ -288,7 +290,7 @@ export default function RoomClient({ code }: { code: string }) {
       serverUrl={join.serverUrl}
       token={join.token}
       connect
-      options={ROOM_OPTIONS}
+      options={roomOptions}
       // Этап 2: микрофон публикуем при входе (живой). Камеру — нет.
       audio={true}
       video={false}
@@ -669,7 +671,18 @@ function RoomView({
   const [screenError, setScreenError] = useState(false);
   const screen = useTrackToggle({
     source: Track.Source.ScreenShare,
-    captureOptions: { audio: true },
+    // contentHint 'motion' подсказывает кодеку, что это видео/игра (а не статичный
+    // текст), и помогает держать частоту кадров. resolution задаёт целевой захват
+    // 480p@30 (базовый лёгкий профиль) — без него getDisplayMedia берёт системный дефолт.
+    captureOptions: {
+      audio: true,
+      resolution: {
+        width: SCREEN_SHARE_CAPTURE.width,
+        height: SCREEN_SHARE_CAPTURE.height,
+        frameRate: SCREEN_SHARE_CAPTURE.frameRate,
+      },
+      contentHint: "motion",
+    },
     // Отмена в системном окне выбора экрана прилетает сюда — не роняем комнату,
     // показываем мягкий баннер (как с микрофоном).
     onDeviceError: () => setScreenError(true),
