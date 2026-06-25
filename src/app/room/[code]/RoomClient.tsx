@@ -52,6 +52,7 @@ import { initSfx, playSfx, setSfxDeafened } from "@/lib/audio/sfx";
 import RoomAudio from "./RoomAudio";
 import SettingsModal from "./SettingsModal";
 import TacticsBoard from "./TacticsBoard";
+import RoomChat from "./RoomChat";
 import Killfeed from "./Killfeed";
 import Banner from "@/components/Banner";
 import Icon, { type IconName } from "@/components/Icon";
@@ -608,6 +609,15 @@ function RoomView({
     setView(opening ? "board" : screensActive ? "screen" : "room");
   }, [view, screensActive]);
 
+  // Чат — отдельный флаг, НЕ часть `view`: переписываться можно и поверх доски/
+  // демонстрации. `unread` копит непрочитанные, пока панель закрыта.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const toggleChat = useCallback(() => {
+    playSfx(chatOpen ? "board-close" : "board-open");
+    setChatOpen((v) => !v);
+  }, [chatOpen]);
+
   // Озвученные обёртки своих действий: звук играем в месте нажатия (а не по
   // смене состояния) — так не ловим ложных срабатываний на авто-публикацию
   // микрофона при входе и авто-раскрытие экрана.
@@ -685,6 +695,12 @@ function RoomView({
         case "Digit2":
           e.preventDefault();
           toggleBoard();
+          break;
+        case "Enter":
+          // Классика игр: Enter открывает чат и ставит фокус в поле (фокусом
+          // занимается RoomChat). Закрытие — Esc (тоже в RoomChat).
+          e.preventDefault();
+          setChatOpen(true);
           break;
       }
     };
@@ -807,6 +823,9 @@ function RoomView({
         onScreen={toggleScreen}
         boardOpen={view === "board"}
         onToggleBoard={toggleBoard}
+        chatOpen={chatOpen}
+        unread={unread}
+        onToggleChat={toggleChat}
         amHost={amHost}
         locked={locked}
         onLock={() => void doModerate(locked ? "unlock" : "lock")}
@@ -815,6 +834,10 @@ function RoomView({
         onOpenSettings={() => setSettingsOpen(true)}
         onLeave={leaveWithSound}
       />
+
+      {/* Чат всегда смонтирован (видимость — внутри по `open`): копит сообщения и
+          непрочитанные, пока панель закрыта. */}
+      <RoomChat open={chatOpen} onClose={() => setChatOpen(false)} onUnread={setUnread} />
 
       {menu && (
         <ParticipantMenu
@@ -1311,6 +1334,9 @@ function Dock({
   onScreen,
   boardOpen,
   onToggleBoard,
+  chatOpen,
+  unread,
+  onToggleChat,
   amHost,
   locked,
   onLock,
@@ -1330,6 +1356,9 @@ function Dock({
   onScreen: () => void;
   boardOpen: boolean;
   onToggleBoard: () => void;
+  chatOpen: boolean;
+  unread: number;
+  onToggleChat: () => void;
   amHost: boolean;
   locked: boolean;
   onLock: () => void;
@@ -1376,6 +1405,19 @@ function Dock({
       >
         <Icon name="pencil" size={18} />
         Доска
+      </button>
+      <button
+        onClick={onToggleChat}
+        title="Чат (Enter)"
+        className={"dock-btn" + (chatOpen ? " dock-btn--active" : "")}
+      >
+        <Icon name="chat" size={18} />
+        Чат
+        {unread > 0 && (
+          <span className="dock-btn__badge" aria-label={`Непрочитанных: ${unread}`}>
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
       </button>
 
       <span className="dock-sep" />

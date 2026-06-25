@@ -31,7 +31,9 @@ export type IconName =
   | "dots"
   | "plus"
   | "refresh"
-  | "search";
+  | "search"
+  | "chat"
+  | "send";
 
 const PATHS: Record<IconName, ReactNode> = {
   mic: (
@@ -206,6 +208,15 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <circle cx="11" cy="11" r="7" />
       <line x1="16" y1="16" x2="21" y2="21" />
+    </>
+  ),
+  // речевой пузырь с «хвостиком» — командный чат
+  chat: <path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />,
+  // бумажный самолётик — отправить
+  send: (
+    <>
+      <path d="M21 4 3 11l6 2.5L21 4z" />
+      <path d="M21 4 11 20l-2-6.5L21 4z" />
     </>
   ),
 };

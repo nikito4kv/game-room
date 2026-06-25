@@ -34,6 +34,7 @@ export type SfxName =
   // B. события от других / система
   | "peer-join"
   | "peer-leave"
+  | "chat"
   | "host-granted"
   | "reconnecting"
   | "reconnected"
@@ -113,6 +114,12 @@ const RECIPES: Record<SfxName, Tone[]> = {
   // чужой вход/выход звучат так же, как свой — единый «голос комнаты»
   "peer-join": ENTER_SOUND,
   "peer-leave": LEAVE_SOUND,
+  // входящее сообщение чата (панель закрыта): тихий короткий «блип» вверх — не
+  // навязчивый, легко отличить от входа/выхода участников
+  "chat": [
+    { freq: 740, dur: 0.05, gain: 0.16, type: "triangle" },
+    { freq: 988, at: 0.05, dur: 0.08, gain: 0.18, type: "triangle" },
+  ],
   // права хоста: торжественная фанфара — 4 ноты вверх + октава-«искра» (самый яркий)
   "host-granted": [
     { freq: 523, dur: 0.1, gain: 0.28 },

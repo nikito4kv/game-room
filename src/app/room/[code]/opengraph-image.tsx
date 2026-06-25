@@ -56,35 +56,36 @@ export default async function Image({
           </div>
         </div>
 
-        {/* Низ: код комнаты (только для существующей) */}
-        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-          {meta ? (
-            <>
-              <div style={{ fontSize: "32px", fontWeight: 500, color: OG.dim }}>
-                Код
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  fontSize: "48px",
-                  fontWeight: 700,
-                  letterSpacing: "0.12em",
-                  padding: "10px 28px",
-                  borderRadius: "16px",
-                  color: OG.accent,
-                  border: `3px solid ${OG.accent}`,
-                  backgroundColor: `${OG.accent}1a`,
-                }}
-              >
-                {upper}
-              </div>
-            </>
-          ) : (
-            <div style={{ fontSize: "34px", fontWeight: 500, color: OG.dim }}>
-              Заходи по коду — без регистрации
+        {/* Низ: код комнаты (только для существующей). Используем вложенный
+            flex-div, а НЕ Fragment как прямого потомка — satori не флэттит
+            фрагменты, из-за чего подпись и бокс налезали друг на друга. */}
+        {meta ? (
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <div style={{ fontSize: "32px", fontWeight: 500, color: OG.dim }}>
+              Код
             </div>
-          )}
-        </div>
+            <div
+              style={{
+                display: "flex",
+                marginLeft: "20px",
+                fontSize: "48px",
+                fontWeight: 700,
+                letterSpacing: "0.12em",
+                padding: "10px 28px",
+                borderRadius: "16px",
+                color: OG.accent,
+                border: `3px solid ${OG.accent}`,
+                backgroundColor: `${OG.accent}1a`,
+              }}
+            >
+              {upper}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", fontSize: "34px", fontWeight: 500, color: OG.dim }}>
+            Заходи по коду — без регистрации
+          </div>
+        )}
       </div>
     ),
     { ...size, fonts },
