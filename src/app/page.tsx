@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   getNickname,
@@ -107,10 +106,6 @@ export default function Home() {
         <p className="text-sm text-text-dim">
           Голосовая игровая комната без регистрации. Заходи по коду — собирай отряд.
         </p>
-        <Link href="/rooms" className="btn btn--ghost btn--sm self-start">
-          <Icon name="users" size={16} />
-          Публичные комнаты
-        </Link>
       </header>
 
       <label className="field-label rise" style={{ animationDelay: "40ms" }}>

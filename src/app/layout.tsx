@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Exo_2, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import SiteNav from "@/components/SiteNav";
 
 // Три семейства дизайн-системы, self-hosted через next/font, с кириллицей.
 // Каждое отдаёт CSS-переменную, на которую ссылаются токены скина (tokens.css):
@@ -40,7 +41,10 @@ export default function RootLayout({
       data-skin="arena"
       className={`${display.variable} ${ui.variable} ${mono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <SiteNav />
+        {children}
+      </body>
     </html>
   );
 }

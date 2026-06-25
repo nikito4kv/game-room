@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import Banner from "@/components/Banner";
 import Icon, { type IconName } from "@/components/Icon";
 import { plural } from "@/lib/plural";
@@ -17,25 +16,26 @@ const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "locked", label: "Закрытые" },
 ];
 
-// Статус-иконка комнаты: открытая (зелёный замок) / с паролем (жёлтый) /
-// закрытая (перечёркнутый круг, не кликабельна).
+// Статус комнаты: открытая (зелёный) / с паролем (жёлтый) / закрытая (красный,
+// не кликабельна). variant задаёт цвет левого рейла строки, label — видимый
+// текст (раньше смысл нёс только цвет иконки + tooltip — это было недоступно).
 function statusOf(room: PublicRoomSummary): {
   icon: IconName;
   cls: string;
   label: string;
+  variant: "open" | "pass" | "locked";
   clickable: boolean;
 } {
   if (room.locked) {
-    return { icon: "ban", cls: "text-danger", label: "Закрыта", clickable: false };
+    return { icon: "ban", cls: "text-danger", label: "Закрыта", variant: "locked", clickable: false };
   }
   if (room.hasPassword) {
-    return { icon: "lock", cls: "text-warn", label: "Пароль", clickable: true };
+    return { icon: "lock", cls: "text-warn", label: "Нужен пароль", variant: "pass", clickable: true };
   }
-  return { icon: "lock-open", cls: "text-live", label: "Открыта", clickable: true };
+  return { icon: "lock-open", cls: "text-live", label: "Открыта", variant: "open", clickable: true };
 }
 
 export default function PublicRooms() {
-  const router = useRouter();
   const [rooms, setRooms] = useState<PublicRoomSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +92,16 @@ export default function PublicRooms() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load]);
 
+  // Итог сверху: сколько всего живых комнат и людей в них (по всему списку,
+  // до фильтра/поиска) — даёт ощущение «эфир идёт прямо сейчас».
+  const stats = useMemo(
+    () => ({
+      count: rooms.length,
+      people: rooms.reduce((sum, r) => sum + (r.numParticipants || 0), 0),
+    }),
+    [rooms],
+  );
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rooms.filter((r) => {
@@ -106,21 +116,25 @@ export default function PublicRooms() {
   }, [rooms, query, filter]);
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-16">
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-12">
       <header className="rise flex flex-col gap-3">
-        <Link href="/" className="btn btn--ghost btn--sm self-start">
-          <Icon name="login" size={14} className="rotate-180" /> На главную
-        </Link>
         <h1 className="font-display text-3xl font-bold tracking-tight">
           Публичные <span className="text-accent-hi">комнаты</span>
         </h1>
         <p className="text-sm text-text-dim">
           Открытые голосовые комнаты — заходи к тем, кто уже в игре.
         </p>
+        {!loading && stats.count > 0 && (
+          <p className="flex items-center gap-2 text-sm text-text-dim">
+            <span className="dot" />
+            {stats.count} {plural(stats.count, ["комната", "комнаты", "комнат"])} ·{" "}
+            {stats.people} {plural(stats.people, ["человек", "человека", "человек"])} в эфире
+          </p>
+        )}
       </header>
 
       <div className="rise flex flex-wrap items-center gap-3" style={{ animationDelay: "40ms" }}>
-        <label className="relative flex flex-1 items-center">
+        <label className="relative flex flex-1 basis-64 items-center">
           <span className="pointer-events-none absolute left-3 text-text-mute">
             <Icon name="search" size={16} />
           </span>
@@ -132,18 +146,19 @@ export default function PublicRooms() {
             style={{ paddingLeft: "2.25rem" }}
           />
         </label>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as StatusFilter)}
-          className="field"
-          aria-label="Фильтр комнат"
-        >
+        <div className="seg" role="group" aria-label="Фильтр комнат по статусу">
           {FILTERS.map((f) => (
-            <option key={f.value} value={f.value}>
+            <button
+              key={f.value}
+              type="button"
+              className="seg-btn"
+              aria-pressed={filter === f.value}
+              onClick={() => setFilter(f.value)}
+            >
               {f.label}
-            </option>
+            </button>
           ))}
-        </select>
+        </div>
         <button
           type="button"
           onClick={() => void load()}
@@ -160,69 +175,84 @@ export default function PublicRooms() {
 
       {loading ? (
         <p className="text-sm text-text-mute">Загрузка…</p>
+      ) : rooms.length === 0 ? (
+        <div className="panel rise flex flex-col items-start gap-4 p-6">
+          <p className="text-sm text-text-dim">
+            Сейчас никто не в эфире. Создай комнату — остальные подтянутся.
+          </p>
+          <Link href="/" className="btn btn--primary">
+            <Icon name="plus" />
+            Создать комнату
+          </Link>
+        </div>
       ) : visible.length === 0 ? (
         <p className="rise text-sm text-text-mute">
-          {rooms.length === 0
-            ? "Сейчас нет открытых комнат. Создай свою на главной."
-            : "Ничего не найдено — попробуй другой запрос или фильтр."}
+          Ничего не найдено — попробуй другой запрос или фильтр.
         </p>
       ) : (
-        <ul className="grid gap-4 sm:grid-cols-2">
+        <ul className="flex flex-col gap-3">
           {visible.map((room, i) => {
             const status = statusOf(room);
-            const players = `${room.numParticipants}/${room.maxParticipants}`;
-            const inner = (
-              <>
-                <div className="flex items-start justify-between gap-2">
-                  <h2 className="font-display text-base font-bold leading-tight">
-                    {room.title}
-                  </h2>
-                  <span
-                    className={`flex shrink-0 items-center gap-1 text-xs ${status.cls}`}
-                    title={status.label}
-                  >
-                    <Icon name={status.icon} size={16} />
-                  </span>
+            const delay = { animationDelay: `${Math.min(i, 8) * 30}ms` };
+
+            const main = (
+              <div className="lobby-main">
+                <h2 className="lobby-title">{room.title}</h2>
+                <div className="lobby-sub">
+                  {room.hostIdentity} · <span className="lobby-code">#{room.code}</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="chip chip--code">
-                    <Icon name="hash" size={13} />
-                    {room.code}
-                  </span>
-                  <span className="chip">
-                    <Icon name="users" size={14} />
-                    {room.numParticipants} {plural(room.numParticipants, [
-                      "участник",
-                      "участника",
-                      "участников",
-                    ])}
-                  </span>
-                </div>
-                <span className="mt-auto text-xs text-text-mute">
-                  {status.clickable ? `Хост: ${room.hostIdentity} · ${players}` : "Закрыта для входа"}
-                </span>
-              </>
+              </div>
             );
 
-            const baseClass = "panel flex flex-col gap-3 p-4 text-left rise";
+            const meta = (
+              <div className="lobby-meta">
+                <span className={`lobby-status ${status.cls}`}>
+                  <Icon name={status.icon} size={16} />
+                  {status.label}
+                </span>
+                <span className="lobby-slots">
+                  <span
+                    className="slot-meter"
+                    aria-label={`${room.numParticipants} из ${room.maxParticipants} мест занято`}
+                  >
+                    {Array.from({ length: room.maxParticipants }).map((_, s) => (
+                      <span
+                        key={s}
+                        className={`slot ${s < room.numParticipants ? "slot--filled" : ""}`}
+                      />
+                    ))}
+                  </span>
+                  <span className="lobby-count">
+                    {room.numParticipants}/{room.maxParticipants}
+                  </span>
+                </span>
+                {status.clickable ? (
+                  <span className="lobby-go" aria-hidden="true">
+                    Зайти →
+                  </span>
+                ) : (
+                  <span className="lobby-go lobby-go--dim" aria-hidden="true">
+                    —
+                  </span>
+                )}
+              </div>
+            );
 
             return (
               <li key={room.code}>
                 {status.clickable ? (
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/room/${room.code}`)}
-                    className={`${baseClass} w-full transition-colors hover:border-border-strong`}
-                    style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
+                  <Link
+                    href={`/room/${room.code}`}
+                    className={`lobby-row lobby-row--${status.variant} rise`}
+                    style={delay}
                   >
-                    {inner}
-                  </button>
+                    {main}
+                    {meta}
+                  </Link>
                 ) : (
-                  <div
-                    className={`${baseClass} cursor-not-allowed opacity-60`}
-                    style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
-                  >
-                    {inner}
+                  <div className={`lobby-row lobby-row--${status.variant} rise`} style={delay}>
+                    {main}
+                    {meta}
                   </div>
                 )}
               </li>
