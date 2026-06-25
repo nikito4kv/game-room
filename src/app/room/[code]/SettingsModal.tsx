@@ -3,9 +3,19 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMediaDeviceSelect } from "@livekit/components-react";
 import { supportsAudioOutputSelection } from "livekit-client";
-import { getSfxEnabled, getSfxVolume, setInputDevice, setOutputDevice } from "@/lib/clientStorage";
+import {
+  DEFAULT_KEYBINDS,
+  getSfxEnabled,
+  getSfxVolume,
+  setInputDevice,
+  setOutputDevice,
+  type KeyAction,
+  type Keybinds,
+  type VoiceMode,
+} from "@/lib/clientStorage";
 import { playSfx, setSfxEnabled, setSfxVolume } from "@/lib/audio/sfx";
 import { startMicTest, type MicTest } from "@/lib/audio/micTest";
+import { ACTION_LABELS, formatKeyCode } from "@/lib/keys";
 import Icon from "@/components/Icon";
 
 /**
@@ -23,6 +33,12 @@ export default function SettingsModal({
   onChangeInputGain,
   noiseSuppression,
   onChangeNoiseSuppression,
+  voiceMode,
+  onChangeVoiceMode,
+  binds,
+  onChangeBinds,
+  showKeys,
+  onChangeShowKeys,
 }: {
   onClose: () => void;
   masterVolume: number;
@@ -31,6 +47,12 @@ export default function SettingsModal({
   onChangeInputGain: (v: number) => void;
   noiseSuppression: boolean;
   onChangeNoiseSuppression: (on: boolean) => void;
+  voiceMode: VoiceMode;
+  onChangeVoiceMode: (mode: VoiceMode) => void;
+  binds: Keybinds;
+  onChangeBinds: (binds: Keybinds) => void;
+  showKeys: boolean;
+  onChangeShowKeys: (on: boolean) => void;
 }) {
   // requestPermissions:true — чтобы получить названия устройств (в комнате доступ
   // к микрофону уже есть, повторного запроса не будет).
@@ -206,7 +228,172 @@ export default function SettingsModal({
             )}
           </div>
         </section>
+
+        {/* ── Управление ───────────────────────────────────────── */}
+        <section className="flex flex-col gap-3">
+          <h3 className="panel-h flex items-center gap-2">
+            <Icon name="sliders" size={15} /> Управление
+          </h3>
+
+          <div className="settings-card">
+            <SettingRow
+              title="Режим голоса"
+              desc={
+                voiceMode === "ptt"
+                  ? "Рация: держите клавишу, чтобы говорить"
+                  : "Открытый микрофон: передаёт постоянно"
+              }
+            >
+              <Segmented
+                value={voiceMode}
+                onChange={onChangeVoiceMode}
+                options={[
+                  { value: "toggle", label: "Открытый" },
+                  { value: "ptt", label: "Рация" },
+                ]}
+              />
+            </SettingRow>
+
+            <SettingRow
+              title="Показывать клавиши"
+              desc="Буква бинда в углу кнопок управления"
+            >
+              <Toggle
+                checked={showKeys}
+                onChange={onChangeShowKeys}
+                label="Показывать клавиши"
+              />
+            </SettingRow>
+          </div>
+
+          {/* Привязки клавиш. Рацию показываем только в её режиме. */}
+          <div className="settings-card">
+            {(Object.keys(ACTION_LABELS) as KeyAction[])
+              .filter((a) => a !== "ptt" || voiceMode === "ptt")
+              .map((action) => (
+                <BindRow
+                  key={action}
+                  action={action}
+                  binds={binds}
+                  onChangeBinds={onChangeBinds}
+                />
+              ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onChangeBinds(DEFAULT_KEYBINDS)}
+            className="btn btn--ghost btn--sm self-start"
+          >
+            Сбросить к умолчанию
+          </button>
+        </section>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Сегмент-переключатель: ряд radio-кнопок в одной пилюле. Активная залита --accent.
+ * Доступен с клавиатуры (роли radio/radiogroup, видимый фокус из .btn-токенов).
+ */
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div className="segmented" role="radiogroup">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={"segmented__btn" + (value === o.value ? " is-active" : "")}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Строка привязки клавиши: подпись действия + кнопка с текущей клавишей. Клик по
+ * кнопке включает режим захвата — следующий keydown становится новой привязкой.
+ * Esc отменяет; уже занятая клавиша отклоняется с пояснением.
+ */
+function BindRow({
+  action,
+  binds,
+  onChangeBinds,
+}: {
+  action: KeyAction;
+  binds: Keybinds;
+  onChangeBinds: (binds: Keybinds) => void;
+}) {
+  const [capturing, setCapturing] = useState(false);
+  const [conflict, setConflict] = useState<KeyAction | null>(null);
+
+  useEffect(() => {
+    if (!capturing) return;
+    // capture:true — перехватываем раньше горячих клавиш комнаты, чтобы нажатие
+    // ушло в привязку, а не сработало как действие.
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === "Escape") {
+        setCapturing(false);
+        setConflict(null);
+        return;
+      }
+      // Клавиша уже занята другим действием — не присваиваем, поясняем и ждём дальше.
+      const taken = (Object.keys(binds) as KeyAction[]).find(
+        (a) => a !== action && binds[a] === e.code,
+      );
+      if (taken) {
+        setConflict(taken);
+        return;
+      }
+      onChangeBinds({ ...binds, [action]: e.code });
+      setCapturing(false);
+      setConflict(null);
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [capturing, binds, action, onChangeBinds]);
+
+  return (
+    <div className="setting-row">
+      <span className="setting-row-text">
+        <span className="setting-row-title">{ACTION_LABELS[action]}</span>
+        {capturing && (
+          <span className="setting-row-desc">
+            {conflict ? (
+              <span className="text-warn">Уже занято: {ACTION_LABELS[conflict]}</span>
+            ) : (
+              "Нажмите клавишу… (Esc — отмена)"
+            )}
+          </span>
+        )}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          setCapturing((v) => !v);
+          setConflict(null);
+        }}
+        className={"kbd kbd--btn" + (capturing ? " kbd--capturing" : "")}
+        aria-label={`Клавиша для «${ACTION_LABELS[action]}»: ${formatKeyCode(binds[action])}`}
+      >
+        {capturing ? "…" : formatKeyCode(binds[action])}
+      </button>
     </div>
   );
 }

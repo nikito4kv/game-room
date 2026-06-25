@@ -30,24 +30,35 @@ import {
 import { moderate, type ModerationAction } from "@/lib/moderation";
 import {
   clearPassword,
+  DEFAULT_KEYBINDS,
   getHostKey,
   getInputDevice,
   getInputGain,
+  getKeybinds,
   getMasterVolume,
   getNoiseSuppression,
   getOutputDevice,
   getNickname,
   getParticipantMutes,
   getParticipantVolumes,
+  getShowKeys,
+  getVoiceMode,
   setInputGain,
+  setKeybinds,
   setMasterVolume,
   setNickname as saveNickname,
   setNoiseSuppression,
   setParticipantMute,
   setParticipantVolume,
+  setShowKeys,
+  setVoiceMode,
   takePassword,
+  type KeyAction,
+  type Keybinds,
+  type VoiceMode,
 } from "@/lib/clientStorage";
 import { MicProcessor } from "@/lib/audio/micProcessor";
+import { ACTION_LABELS, formatKeyCode } from "@/lib/keys";
 import { initSfx, playSfx, setSfxDeafened } from "@/lib/audio/sfx";
 import RoomAudio from "./RoomAudio";
 import SettingsModal from "./SettingsModal";
@@ -65,6 +76,28 @@ type JoinInfo = { token: string; serverUrl: string; title: string; isHost: boole
 // выставляет HTMLMediaElement.volume напрямую и значение >1 роняет ошибку.
 // Объект вынесен из компонента — стабильная ссылка, чтобы Room не пересоздавался.
 const ROOM_OPTIONS = { webAudioMix: true } as const;
+
+// Курсор в поле ввода — горячие клавиши не перехватываем (печатаем текст).
+function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return (
+    !!el &&
+    (el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.tagName === "SELECT" ||
+      el.isContentEditable)
+  );
+}
+
+// Держит ref в синхроне со свежим значением — чтобы window-обработчики читали
+// актуальное состояние, не пересоздаваясь на каждое изменение.
+function useLatestRef<T>(value: T) {
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return ref;
+}
 
 export default function RoomClient({ code }: { code: string }) {
   const router = useRouter();
@@ -539,6 +572,19 @@ function RoomView({
   // Какой именно микрофон-трек уже обработан — чтобы не вешать процессор дважды.
   const processedSidRef = useRef<string | null>(null);
 
+  // Свой опубликованный аудио-трек микрофона (для рации — mute/unmute вживую).
+  const getMicTrack = useCallback(
+    () =>
+      localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack as
+        | LocalAudioTrack
+        | undefined,
+    [localParticipant],
+  );
+  // mic.enabled/pending читаем в обработчиках через ref — не пересоздаём
+  // слушатели и эффекты на каждый тик LiveKit-хука.
+  const micPendingRef = useLatestRef(mic.pending);
+  const micEnabledRef = useLatestRef(mic.enabled);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое чтение localStorage
     setInputGainState(getInputGain());
@@ -566,6 +612,41 @@ function RoomView({
     },
     [micProcessor],
   );
+
+  // --- Горячие клавиши, режим голоса (рация) и оверлей клавиш ---
+  // Всё «для себя», читаем из localStorage один раз после монтирования (на SSR
+  // его нет). Бинды читаем в обработчиках через ref — чтобы не пересоздавать
+  // window-слушатели на каждое изменение привязки.
+  const [binds, setBindsState] = useState<Keybinds>(DEFAULT_KEYBINDS);
+  const [voiceMode, setVoiceModeState] = useState<VoiceMode>("toggle");
+  const [showKeys, setShowKeysState] = useState(true);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое чтение localStorage
+    setBindsState(getKeybinds());
+    setVoiceModeState(getVoiceMode());
+    setShowKeysState(getShowKeys());
+  }, []);
+  const changeBinds = useCallback((next: Keybinds) => {
+    setBindsState(next);
+    setKeybinds(next);
+  }, []);
+  const changeVoiceMode = useCallback((mode: VoiceMode) => {
+    setVoiceModeState(mode);
+    setVoiceMode(mode);
+  }, []);
+  const changeShowKeys = useCallback((on: boolean) => {
+    setShowKeysState(on);
+    setShowKeys(on);
+  }, []);
+  // Рефы для чтения свежих значений внутри window-обработчиков без их пересоздания.
+  const bindsRef = useLatestRef(binds);
+  const voiceModeRef = useLatestRef(voiceMode);
+  const forceMutedMeRef = useLatestRef(forceMutedMe);
+
+  // Реально ли сейчас идёт передача (в рации — пока удерживают клавишу). В режиме
+  // «открытый микрофон» совпадает с mic.enabled; в рации — отдельный сигнал, т.к.
+  // mic.enabled там значит «трек опубликован» (armed), а не «говорю».
+  const [pttTalking, setPttTalking] = useState(false);
 
   // Навешиваем MicProcessor на локальный микрофон после публикации. Идемпотентно
   // через processedSidRef (повторная публикация / dev StrictMode не дублируют).
@@ -664,56 +745,148 @@ function RoomView({
     if (state === ConnectionState.Connected) setEverConnected(true);
   }, [state]);
 
-  // Горячие клавиши — десктоп-аналог «button prompt». Привязки совпадают с
-  // keycap-подсказками на кнопках (M/D/S/1/2). Берём e.code (физическая клавиша),
-  // чтобы работало и на русской раскладке; не перехватываем при вводе в поля.
+  // Горячие клавиши — десктоп-аналог «button prompt». Привязки настраиваются
+  // (см. настройки) и читаются через bindsRef, поэтому слушатель не пересоздаётся
+  // при смене бинда. Берём e.code (физическая клавиша) — работает на любой
+  // раскладке; не перехватываем при вводе в поля. Рация (ptt) — своя пара
+  // keydown/keyup ниже, здесь её действие пропускаем.
   useEffect(() => {
+    // Декларативный маппинг действие→хендлер: новое действие = одна строка здесь.
+    // chat и ptt — со своей логикой (фокус-гард / удержание), обрабатываются отдельно.
+    const handlers: Partial<Record<KeyAction, () => void>> = {
+      // В режиме рации M включает/выключает саму рацию (см. toggleMic).
+      mic: toggleMic,
+      deafen: toggleDeafenWithSound,
+      screen: toggleScreen,
+      board: toggleBoard,
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.tagName === "SELECT" ||
-          t.isContentEditable)
-      )
-        return;
-      switch (e.code) {
-        case "KeyM":
-          e.preventDefault();
-          toggleMic();
-          break;
-        case "KeyD":
-          e.preventDefault();
-          toggleDeafenWithSound();
-          break;
-        case "KeyS":
-          e.preventDefault();
-          toggleScreen();
-          break;
-        case "Digit2":
-          e.preventDefault();
-          toggleBoard();
-          break;
-        case "Enter": {
-          // Классика игр: Enter открывает чат и ставит фокус в поле (фокусом
-          // занимается RoomChat). Закрытие — Esc (тоже в RoomChat). Но Enter
-          // АКТИВИРУЕТ сфокусированный контрол (кнопку дока, кружок-участника с
-          // role="button") — не перехватываем его, иначе подавили бы нативное
-          // действие и продублировали бы открытие. Открываем чат только при
-          // «нейтральном» фокусе.
+      if (isTypingTarget(e.target)) return;
+      const b = bindsRef.current;
+      const action = (Object.keys(b) as KeyAction[]).find((a) => b[a] === e.code);
+      if (!action || action === "ptt") return; // рация — своя пара keydown/keyup ниже
+      if (action === "chat") {
+        // Enter/Space НАТИВНО активируют сфокусированный контрол (кнопку дока,
+        // кружок-участника с role="button") — для них не перехватываем, чтобы не
+        // дублировать действие. Прочие бинды чата открывают чат при любом фокусе.
+        if (b.chat === "Enter" || b.chat === "Space") {
           const el = e.target as HTMLElement | null;
-          if (el && el.closest('button, a, [role="button"], [tabindex]')) break;
-          e.preventDefault();
-          setChatOpen(true);
-          break;
+          if (el && el.closest('button, a, [role="button"], [tabindex]')) return;
         }
+        e.preventDefault();
+        setChatOpen(true);
+        return;
+      }
+      const handler = handlers[action];
+      if (handler) {
+        e.preventDefault();
+        handler();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleMic, toggleDeafenWithSound, toggleScreen, toggleBoard]);
+  }, [toggleMic, toggleDeafenWithSound, toggleScreen, toggleBoard, bindsRef]);
+
+  // --- Рация (push-to-talk) ---
+  // Реализуем через track.mute()/unmute() опубликованного микрофона: у микрофонного
+  // трека stopOnMute=false, поэтому mute мгновенный, не дёргает getUserMedia, не
+  // пересобирает MicProcessor и шлёт участникам TrackMuted (у других корректно
+  // гаснет «говорит»). Это лучше mic.toggle()/setGain(0).
+
+  // Привести трек в «молчим» для рации — единая точка для всех путей появления
+  // трека (вход в режим, авто-арм, перевод M, смена устройства). Так инвариант
+  // «в рации трек замьючен» не размазан по обработчикам и не рассинхронится.
+  const muteForPtt = useCallback(() => {
+    if (voiceModeRef.current === "ptt" && !forceMutedMeRef.current) {
+      void getMicTrack()?.mute();
+    }
+  }, [getMicTrack, voiceModeRef, forceMutedMeRef]);
+
+  // Запоминаем, был ли микрофон включён ДО входа в рацию: если рация сама его
+  // подняла (авто-арм при выключенном микрофоне), то на выходе её надо ВЫКЛЮЧИТЬ
+  // обратно, а не размьютить — иначе пользователь, входивший с выключенным
+  // микрофоном, после переключения режимов внезапно окажется в эфире.
+  const micWasOnBeforePttRef = useRef(false);
+
+  // Смена режима. ВХОД в рацию: трек должен быть опубликован (если нет — авто-арм
+  // через mic.toggle, новый трек замьютит LocalTrackPublished) и замьючен. ВЫХОД:
+  // восстанавливаем состояние, которое было до входа. Эффект реагирует ТОЛЬКО на
+  // смену режима (deps=[voiceMode]) — чтобы выключение рации клавишей M
+  // (mic.enabled→false) не приводило к авто-переарму.
+  useEffect(() => {
+    if (voiceMode === "ptt") {
+      if (forceMutedMeRef.current) return;
+      micWasOnBeforePttRef.current = micEnabledRef.current;
+      if (micEnabledRef.current) void getMicTrack()?.mute();
+      else if (!micPendingRef.current) void mic.toggle(); // авто-арм
+    } else if (micWasOnBeforePttRef.current) {
+      void getMicTrack()?.unmute(); // был открытый микрофон — возвращаем эфир
+    } else if (micEnabledRef.current && !micPendingRef.current) {
+      void mic.toggle(); // снимаем авто-арм — возвращаем микрофон в «выключено»
+    }
+    // mic.toggle берём из замыкания текущего рендера; в deps только voiceMode —
+    // остальное читаем через ref, чтобы эффект не срабатывал вне смены режима.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceMode]);
+
+  // Новый микрофонный трек (авто-арм, перевод M, смена устройства) в режиме рации
+  // должен появляться замьюченным — иначе на доли секунды утечёт звук.
+  useEffect(() => {
+    const onPublished = (pub: { source?: Track.Source }) => {
+      if (pub.source === Track.Source.Microphone) muteForPtt();
+    };
+    room.on(RoomEvent.LocalTrackPublished, onPublished);
+    return () => {
+      room.off(RoomEvent.LocalTrackPublished, onPublished);
+    };
+  }, [room, muteForPtt]);
+
+  // Удержание PTT-клавиши: keydown → unmute (говорим), keyup → mute (молчим).
+  // Активен только в режиме рации. pttTalking зажигает индикатор «в эфире».
+  useEffect(() => {
+    if (voiceMode !== "ptt") return;
+    const onDown = (e: KeyboardEvent) => {
+      if (e.repeat) return; // автоповтор held key — не спамим unmute
+      if (e.code !== bindsRef.current.ptt) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      if (forceMutedMeRef.current || micPendingRef.current) return;
+      e.preventDefault();
+      const t = getMicTrack();
+      if (t?.isMuted) {
+        void t.unmute();
+        setPttTalking(true);
+        playSfx("mic-on");
+      }
+    };
+    // keyup НЕ фильтруем по полю/модификаторам — иначе отпускание над инпутом или с
+    // зажатым модификатором оставило бы микрофон открытым (залипание говорящим).
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== bindsRef.current.ptt) return;
+      const t = getMicTrack();
+      if (t && !t.isMuted) {
+        void t.mute();
+        setPttTalking(false);
+        playSfx("mic-off");
+      }
+    };
+    // Alt-tab при зажатой клавише не пришлёт keyup — глушим по потере фокуса окна.
+    const onBlur = () => {
+      const t = getMicTrack();
+      if (t && !t.isMuted) void t.mute();
+      setPttTalking(false);
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", onBlur);
+      setPttTalking(false); // вышли из рации — сбрасываем индикатор
+    };
+  }, [voiceMode, getMicTrack, bindsRef, forceMutedMeRef, micPendingRef]);
 
   // Хост удалил нас из комнаты — отдельный экран с понятной причиной.
   if (removed) {
@@ -762,6 +935,12 @@ function RoomView({
           onChangeInputGain={changeInputGain}
           noiseSuppression={noiseSuppression}
           onChangeNoiseSuppression={changeNoiseSuppression}
+          voiceMode={voiceMode}
+          onChangeVoiceMode={changeVoiceMode}
+          binds={binds}
+          onChangeBinds={changeBinds}
+          showKeys={showKeys}
+          onChangeShowKeys={changeShowKeys}
         />
       )}
 
@@ -819,7 +998,11 @@ function RoomView({
       </div>
 
       <Dock
+        binds={binds}
+        voiceMode={voiceMode}
+        showKeys={showKeys}
         micEnabled={mic.enabled}
+        micLive={voiceMode === "ptt" ? pttTalking : mic.enabled}
         micPending={mic.pending}
         forceMutedMe={forceMutedMe}
         onMic={toggleMic}
@@ -1328,9 +1511,23 @@ function ParticipantMenu({
   );
 }
 
+/** Буква бинда в правом верхнем углу кнопки дока. Длинный Enter — стрелкой ↵. */
+function DockKey({ code }: { code: string }) {
+  const label = formatKeyCode(code);
+  return (
+    <span className="dock-btn__key" aria-hidden="true">
+      {label === "Enter" ? "↵" : label}
+    </span>
+  );
+}
+
 /** Нижний фиксированный док: всё управление комнатой, как панель абилок в игре. */
 function Dock({
+  binds,
+  voiceMode,
+  showKeys,
   micEnabled,
+  micLive,
   micPending,
   forceMutedMe,
   onMic,
@@ -1352,7 +1549,11 @@ function Dock({
   onOpenSettings,
   onLeave,
 }: {
+  binds: Keybinds;
+  voiceMode: VoiceMode;
+  showKeys: boolean;
   micEnabled: boolean;
+  micLive: boolean;
   micPending: boolean;
   forceMutedMe: boolean;
   onMic: () => void;
@@ -1374,24 +1575,36 @@ function Dock({
   onOpenSettings: () => void;
   onLeave: () => void;
 }) {
+  // В режиме рации кнопка микрофона включает/выключает саму рацию (а говорят
+  // удержанием PTT-клавиши). Зелёный «в эфире» (--live) и иконка завязаны на
+  // micLive (реальная передача), а подпись — на micEnabled (armed/выкл).
+  const ptt = voiceMode === "ptt";
+  const micLabel = ptt ? (micEnabled ? "Рация" : "Рация выкл") : "Микрофон";
+  const micTitle = forceMutedMe
+    ? "Микрофон заглушён хостом"
+    : ptt
+      ? `Рация: вкл/выкл (${formatKeyCode(binds.mic)}), говорить — удерживайте ${formatKeyCode(binds.ptt)}`
+      : `${ACTION_LABELS.mic} (${formatKeyCode(binds.mic)})`;
   return (
     <div className="dock">
       <button
         onClick={onMic}
         disabled={micPending || forceMutedMe}
-        title={forceMutedMe ? "Микрофон заглушён хостом" : "Микрофон (M)"}
-        className={"dock-btn" + (micEnabled ? " dock-btn--live" : "")}
+        title={micTitle}
+        className={"dock-btn" + (micLive ? " dock-btn--live" : "")}
       >
-        <Icon name={micEnabled ? "mic" : "mic-off"} size={18} />
-        Микрофон
+        <Icon name={micLive ? "mic" : "mic-off"} size={18} />
+        {micLabel}
+        {showKeys && <DockKey code={binds.mic} />}
       </button>
       <button
         onClick={onToggleDeafen}
-        title="Заглушить/включить весь звук (D)"
+        title={`${ACTION_LABELS.deafen} (${formatKeyCode(binds.deafen)})`}
         className={"dock-btn" + (deafened ? " dock-btn--off" : "")}
       >
         <Icon name={deafened ? "volume-off" : "volume"} size={18} />
         {deafened ? "Звук выкл" : "Звук вкл"}
+        {showKeys && <DockKey code={binds.deafen} />}
       </button>
 
       <span className="dock-sep" />
@@ -1399,31 +1612,35 @@ function Dock({
       <button
         onClick={onScreen}
         disabled={screenPending}
-        title="Демонстрация экрана (S)"
+        title={`${ACTION_LABELS.screen} (${formatKeyCode(binds.screen)})`}
         className={"dock-btn" + (screenEnabled ? " dock-btn--active" : "")}
       >
         <Icon name={screenEnabled ? "screen-stop" : "screen-share"} size={18} />
         {screenEnabled ? "Стоп показ" : "Экран"}
+        {showKeys && <DockKey code={binds.screen} />}
       </button>
       <button
         onClick={onToggleBoard}
-        title="Доска тактик (2)"
+        title={`${ACTION_LABELS.board} (${formatKeyCode(binds.board)})`}
         className={"dock-btn" + (boardOpen ? " dock-btn--active" : "")}
       >
         <Icon name="pencil" size={18} />
         Доска
+        {showKeys && <DockKey code={binds.board} />}
       </button>
       <button
         onClick={onToggleChat}
-        title="Чат (Enter)"
+        title={`${ACTION_LABELS.chat} (${formatKeyCode(binds.chat)})`}
         className={"dock-btn" + (chatOpen ? " dock-btn--active" : "")}
       >
         <Icon name="chat" size={18} />
         Чат
-        {unread > 0 && (
+        {unread > 0 ? (
           <span className="dock-btn__badge" aria-label={`Непрочитанных: ${unread}`}>
             {unread > 9 ? "9+" : unread}
           </span>
+        ) : (
+          showKeys && <DockKey code={binds.chat} />
         )}
       </button>
 

@@ -323,6 +323,56 @@ input[type="checkbox"] {
   border-color: rgba(0, 0, 0, 0.28);
   color: inherit;
 }
+/* keycap-кнопка в настройках: клик переводит в режим захвата клавиши. */
+.kbd--btn {
+  cursor: pointer;
+  min-width: 2.5rem;
+  text-align: center;
+  transition: border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.kbd--btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.kbd--capturing {
+  color: var(--accent-hi);
+  border-color: var(--accent);
+  animation: kbd-capture 1.1s var(--ease-in-out) infinite;
+}
+@keyframes kbd-capture {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kbd--capturing { animation: none; }
+}
+
+/* Сегмент-переключатель: две и более кнопки в одной пилюле. */
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.segmented__btn {
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.4375rem 0.875rem;
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.segmented__btn:hover {
+  color: var(--text);
+}
+.segmented__btn.is-active {
+  background: var(--accent);
+  color: #fff;
+}
 
 /* --- Поля ввода / select -------------------------------------------------- */
 .field {
@@ -1026,6 +1076,21 @@ a.lobby-row:active {
   font-weight: 600;
   line-height: 1;
   box-shadow: var(--glow-accent);
+}
+/* Буква бинда в правом верхнем углу кнопки: без рамок, цвет наследуется от
+   кнопки (читается и на залитой --live), приглушена — подсказка, не акцент. */
+.dock-btn__key {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: inherit;
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 /* ===========================================================================

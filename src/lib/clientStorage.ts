@@ -18,6 +18,10 @@ const AUDIO_MUTES_KEY = "gr.audio.mutes";
 const SFX_ENABLED_KEY = "gr.sfx.enabled";
 const SFX_VOLUME_KEY = "gr.sfx.volume";
 
+const KEYBINDS_KEY = "gr.keybinds";
+const VOICE_MODE_KEY = "gr.voice.mode";
+const SHOW_KEYS_KEY = "gr.keys.show";
+
 /**
  * Безопасный доступ к Web Storage. В некоторых браузерах (Safari «блокировать
  * все cookie», Firefox с отключённым dom.storage, жёсткие корп-политики) сам
@@ -216,4 +220,71 @@ export function setParticipantMute(identity: string, muted: boolean): void {
   if (muted) map[identity] = true;
   else delete map[identity];
   writeMap(AUDIO_MUTES_KEY, map);
+}
+
+/**
+ * Горячие клавиши и режим голоса. Всё «для себя», переживает перезагрузку.
+ */
+
+/** Действия, которые можно повесить на клавишу. */
+export type KeyAction = "mic" | "deafen" | "screen" | "board" | "chat" | "ptt";
+/** Карта действие → e.code (физическая клавиша, не зависит от раскладки). */
+export type Keybinds = Record<KeyAction, string>;
+
+/**
+ * Дефолтные привязки. Значения — e.code, чтобы работало на любой раскладке.
+ * `ptt` (рация) по умолчанию на V — как привычно по Discord.
+ */
+export const DEFAULT_KEYBINDS: Keybinds = {
+  mic: "KeyM",
+  deafen: "KeyD",
+  screen: "KeyS",
+  board: "Digit2",
+  chat: "Enter",
+  ptt: "KeyV",
+};
+
+/**
+ * Привязки клавиш. Сохранённое сливаем ПОВЕРХ дефолтов (новые действия не ломают
+ * старые сохранения) и САНИРУЕМ: значение должно быть непустой строкой, а коды не
+ * должны повторяться. Иначе мусор/конфликт в localStorage (ручная правка, баг
+ * миграции, будущий импорт) тихо «убил» бы действие — обработчик ищет код в карте,
+ * а пустая строка или дубль не сматчились бы / перекрыли друг друга.
+ */
+export function getKeybinds(): Keybinds {
+  const raw = readMap<unknown>(KEYBINDS_KEY);
+  const actions = Object.keys(DEFAULT_KEYBINDS) as KeyAction[];
+  // Стартуем с дефолтов (уникальны) и применяем сохранённый override только если он
+  // непустая строка И его код не занят ДРУГИМ действием в текущей карте. Так итог
+  // всегда полон и без дублей: ни одно действие не «съест» клавишу другого.
+  const result = { ...DEFAULT_KEYBINDS };
+  for (const action of actions) {
+    const v = raw[action];
+    if (typeof v !== "string" || !v) continue; // мусор/пусто — оставляем дефолт
+    const clash = actions.some((a) => a !== action && result[a] === v);
+    if (clash) continue; // конфликт — отклоняем override, дефолт остаётся
+    result[action] = v;
+  }
+  return result;
+}
+export function setKeybinds(binds: Keybinds): void {
+  writeMap(KEYBINDS_KEY, binds);
+}
+
+/** Режим голоса: "toggle" (открытый микрофон) | "ptt" (рация). */
+export type VoiceMode = "toggle" | "ptt";
+export function getVoiceMode(): VoiceMode {
+  return safeGet(local, VOICE_MODE_KEY) === "ptt" ? "ptt" : "toggle";
+}
+export function setVoiceMode(mode: VoiceMode): void {
+  writeString(VOICE_MODE_KEY, mode);
+}
+
+/** Показывать ли букву бинда на кнопках дока. Вкл по умолчанию. */
+export function getShowKeys(): boolean {
+  const raw = safeGet(local, SHOW_KEYS_KEY);
+  return raw === null ? true : raw === "1";
+}
+export function setShowKeys(value: boolean): void {
+  writeString(SHOW_KEYS_KEY, value ? "1" : "0");
 }
