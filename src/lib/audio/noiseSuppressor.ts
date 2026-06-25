@@ -1,8 +1,22 @@
-import {
-  loadRnnoise,
-  NoiseGateWorkletNode,
-  RnnoiseWorkletNode,
-} from "@sapphi-red/web-noise-suppressor";
+/**
+ * Пакет шумодава грузим ЛЕНИВО (dynamic import), а НЕ статическим import.
+ *
+ * Его классы `class …WorkletNode extends AudioWorkletNode` вычисляются в момент
+ * загрузки модуля пакета, а AudioWorkletNode — браузерный API, которого нет в
+ * Node. Страница комнаты (RoomClient — клиентский компонент, но Next всё равно
+ * прогоняет его при SSR) тянет этот модуль по цепочке RoomClient → micProcessor
+ * → noiseSuppressor, и статический импорт ронял серверный рендер с
+ * `ReferenceError: AudioWorkletNode is not defined`. Динамический import внутри
+ * функций, которые зовутся только в браузере, откладывает вычисление пакета до
+ * рантайма в браузере — на сервере он не трогается вовсе. Промис кэшируем, так
+ * что модуль грузится один раз на вкладку.
+ */
+type NoiseSuppressorModule = typeof import("@sapphi-red/web-noise-suppressor");
+let modulePromise: Promise<NoiseSuppressorModule> | null = null;
+function loadModule(): Promise<NoiseSuppressorModule> {
+  modulePromise ??= import("@sapphi-red/web-noise-suppressor");
+  return modulePromise;
+}
 
 /**
  * Шумоподавление микрофона на RNNoise (нейросеть Xiph/Mozilla, BSD) + noise gate.
@@ -32,16 +46,17 @@ const RNNOISE_WASM_SIMD_URL = `${BASE}/rnnoise_simd.wasm`;
 // что переиспользовать тот же ArrayBuffer безопасно — он не «отстёгивается».
 let wasmPromise: Promise<ArrayBuffer> | null = null;
 function loadWasm(): Promise<ArrayBuffer> {
-  wasmPromise ??= loadRnnoise({
-    url: RNNOISE_WASM_URL,
-    simdUrl: RNNOISE_WASM_SIMD_URL,
-  }).catch((e) => {
-    // НЕ кэшируем отказ навсегда: при ?? кэшировании отклонённого промиса один
-    // сетевой сбой выключил бы шумодав до перезагрузки страницы. Сбрасываем кэш,
-    // чтобы следующая попытка грузила заново.
-    wasmPromise = null;
-    throw e;
-  });
+  wasmPromise ??= loadModule()
+    .then(({ loadRnnoise }) =>
+      loadRnnoise({ url: RNNOISE_WASM_URL, simdUrl: RNNOISE_WASM_SIMD_URL }),
+    )
+    .catch((e) => {
+      // НЕ кэшируем отказ навсегда: при ?? кэшировании отклонённого промиса один
+      // сетевой сбой выключил бы шумодав до перезагрузки страницы. Сбрасываем кэш,
+      // чтобы следующая попытка грузила заново.
+      wasmPromise = null;
+      throw e;
+    });
   return wasmPromise;
 }
 
@@ -69,13 +84,16 @@ export async function createNoiseSuppression(
   if (ctx.sampleRate !== 48000) {
     throw new Error("NoiseSuppression: требуется AudioContext на 48 кГц");
   }
+  // Классы worklet-узлов берём из лениво загруженного пакета (см. loadModule).
   // Воркеры и wasm независимы — грузим параллельно. addModule идемпотентен в
   // рамках контекста, но контекст у нас одноразовый (см. MicProcessor).
-  const [wasmBinary] = await Promise.all([
-    loadWasm(),
-    ctx.audioWorklet.addModule(RNNOISE_WORKLET_URL),
-    ctx.audioWorklet.addModule(NOISE_GATE_WORKLET_URL),
-  ]);
+  const [{ RnnoiseWorkletNode, NoiseGateWorkletNode }, wasmBinary] =
+    await Promise.all([
+      loadModule(),
+      loadWasm(),
+      ctx.audioWorklet.addModule(RNNOISE_WORKLET_URL),
+      ctx.audioWorklet.addModule(NOISE_GATE_WORKLET_URL),
+    ]);
 
   // Микрофон моно — одного канала достаточно (меньше работы worklet'у).
   const rnnoise = new RnnoiseWorkletNode(ctx, { maxChannels: 1, wasmBinary });

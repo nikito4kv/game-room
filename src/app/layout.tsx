@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Exo_2, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import SiteNav from "@/components/SiteNav";
+import { getBaseUrl } from "@/lib/baseUrl";
 
 // Три семейства дизайн-системы, self-hosted через next/font, с кириллицей.
 // Каждое отдаёт CSS-переменную, на которую ссылаются токены скина (tokens.css):
@@ -25,9 +26,31 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
+const DESCRIPTION =
+  "Голосовая игровая комната без регистрации — заходи по коду.";
+
 export const metadata: Metadata = {
-  title: "Game Room",
-  description: "Голосовая игровая комната без регистрации — заходи по коду.",
+  // Абсолютная база для og:url и относительных путей OG-картинок: краулеры
+  // Discord/Telegram разворачивают только абсолютные ссылки. Дочерние страницы
+  // (напр. комната) переопределяют title/openGraph через generateMetadata.
+  metadataBase: new URL(getBaseUrl()),
+  title: {
+    default: "Game Room",
+    template: "%s · Game Room",
+  },
+  description: DESCRIPTION,
+  openGraph: {
+    type: "website",
+    siteName: "Game Room",
+    locale: "ru_RU",
+    title: "Game Room",
+    description: DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Game Room",
+    description: DESCRIPTION,
+  },
 };
 
 export default function RootLayout({
