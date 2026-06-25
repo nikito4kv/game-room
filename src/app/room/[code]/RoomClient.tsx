@@ -696,12 +696,19 @@ function RoomView({
           e.preventDefault();
           toggleBoard();
           break;
-        case "Enter":
+        case "Enter": {
           // Классика игр: Enter открывает чат и ставит фокус в поле (фокусом
-          // занимается RoomChat). Закрытие — Esc (тоже в RoomChat).
+          // занимается RoomChat). Закрытие — Esc (тоже в RoomChat). Но Enter
+          // АКТИВИРУЕТ сфокусированный контрол (кнопку дока, кружок-участника с
+          // role="button") — не перехватываем его, иначе подавили бы нативное
+          // действие и продублировали бы открытие. Открываем чат только при
+          // «нейтральном» фокусе.
+          const el = e.target as HTMLElement | null;
+          if (el && el.closest('button, a, [role="button"], [tabindex]')) break;
           e.preventDefault();
           setChatOpen(true);
           break;
+        }
       }
     };
     window.addEventListener("keydown", onKey);

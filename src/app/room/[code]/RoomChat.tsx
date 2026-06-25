@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useDataChannel, useLocalParticipant } from "@livekit/components-react";
+import { useDataChannel, useLocalParticipant, useRoomContext } from "@livekit/components-react";
+import { RoomEvent } from "livekit-client";
 import Icon from "@/components/Icon";
 import { playSfx } from "@/lib/audio/sfx";
+import { useEphemeralFeed } from "./useEphemeralFeed";
 import {
   CHAT_TOPIC,
   MAX_CHAT_LEN,
@@ -21,12 +23,6 @@ import {
 // пока панель закрыта. При закрытой панели входящее на пару секунд всплывает
 // строкой внизу-слева и затухает (как team-chat), плюс растёт бейдж на кнопке.
 
-// Эфемерная всплывающая строка (паттерн из Killfeed: enter→shown→leave).
-type Toast = ChatMessage & { state: "enter" | "shown" | "leave" };
-
-const TOAST_HOLD_MS = 4000; // сколько висит всплывающая строка до затухания
-const TOAST_EXIT_MS = 220; // длительность ухода (синхронно с CSS-переходом)
-const MAX_TOASTS = 4;
 // Анти-спам приёма: не больше N сообщений от одного участника за окно.
 const SPAM_WINDOW_MS = 3000;
 const SPAM_MAX = 8;
@@ -47,10 +43,13 @@ export default function RoomChat({
   onUnread: (n: number) => void;
 }) {
   const { localParticipant } = useLocalParticipant();
+  const room = useRoomContext();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [draft, setDraft] = useState("");
+  // Всплывающие строки при закрытой панели — общий хук эфемерной ленты (его же
+  // использует Killfeed): enter→shown→leave, кап, очистка таймеров.
+  const { items: toasts, push: pushToast } = useEphemeralFeed<ChatMessage>();
 
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -63,36 +62,22 @@ export default function RoomChat({
   const stickRef = useRef(true);
   // Времена входящих по identity — для простого анти-спама.
   const rateRef = useRef<Map<string, number[]>>(new Map());
-  // Таймеры всплывающих строк — чистим на анмаунте.
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
     openRef.current = open;
   }, [open]);
 
-  // Добавляет всплывающую строку с авто-затуханием (как Killfeed).
-  const pushToast = useCallback((m: ChatMessage) => {
-    setToasts((prev) => [...prev.slice(-(MAX_TOASTS - 1)), { ...m, state: "enter" }]);
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() =>
-        setToasts((prev) => prev.map((t) => (t.id === m.id ? { ...t, state: "shown" } : t))),
-      ),
-    );
-    const drop = (t: ReturnType<typeof setTimeout>) => {
-      const i = timersRef.current.indexOf(t);
-      if (i !== -1) timersRef.current.splice(i, 1);
+  // Участник вышел — выкидываем его запись из анти-спам-карты, чтобы она не росла
+  // бесконечно за долгую сессию с потоком входов/выходов.
+  useEffect(() => {
+    const onLeft = (p: { identity: string }) => {
+      rateRef.current.delete(p.identity);
     };
-    const hold = setTimeout(() => {
-      drop(hold);
-      setToasts((prev) => prev.map((t) => (t.id === m.id ? { ...t, state: "leave" } : t)));
-      const exit = setTimeout(() => {
-        drop(exit);
-        setToasts((prev) => prev.filter((t) => t.id !== m.id));
-      }, TOAST_EXIT_MS);
-      timersRef.current.push(exit);
-    }, TOAST_HOLD_MS);
-    timersRef.current.push(hold);
-  }, []);
+    room.on(RoomEvent.ParticipantDisconnected, onLeft);
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onLeft);
+    };
+  }, [room]);
 
   // Добавляет сообщение в лог с капом по длине.
   const appendMessage = useCallback((m: ChatMessage) => {
@@ -195,12 +180,6 @@ export default function RoomChat({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // Чистим таймеры всплывающих строк на анмаунте.
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => timers.forEach(clearTimeout);
-  }, []);
-
   const onScroll = useCallback(() => {
     const el = logRef.current;
     if (!el) return;
@@ -218,7 +197,7 @@ export default function RoomChat({
         <div className="chat-toasts" aria-live="polite" aria-label="Новые сообщения">
           {toasts.map((t) => (
             <div
-              key={t.id}
+              key={t.key}
               className="chat-toast"
               data-state={t.state === "shown" ? undefined : t.state}
             >

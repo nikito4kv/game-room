@@ -938,6 +938,7 @@ a.lobby-row:active {
   max-width: calc(100vw - 24px);
 }
 .dock-btn {
+  position: relative; /* для абсолютного бейджа непрочитанных (.dock-btn__badge) */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1007,10 +1008,7 @@ a.lobby-row:active {
   margin: 0 2px;
   flex: none;
 }
-/* Бейдж непрочитанных на кнопке «Чат» (нужен position:relative у кнопки). */
-.dock-btn {
-  position: relative;
-}
+/* Бейдж непрочитанных на кнопке «Чат» (position:relative — у самой .dock-btn). */
 .dock-btn__badge {
   position: absolute;
   top: 2px;
