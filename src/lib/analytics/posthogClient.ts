@@ -6,6 +6,7 @@
 // всё превращается в no-op (локальная разработка без аналитики не падает).
 import posthog from "posthog-js";
 import { DEFAULT_POSTHOG_INGESTION_HOST } from "./constants";
+import { normalizePath } from "@/lib/url";
 
 /** Имена событий — одно место правды, чтобы не плодить опечатки. */
 export const EVENTS = {
@@ -14,22 +15,6 @@ export const EVENTS = {
 } as const;
 
 let _ready = false;
-
-/**
- * Привести путь к виду без секретов: `/room/ABC123` → `/room/[code]`. Так код
- * комнаты не попадает в pageview-отчёты (и не плодит высокую кардинальность).
- * Принимает как полный URL, так и голый путь.
- */
-export function normalizePath(url: string): string {
-  let path = url;
-  try {
-    // Если пришёл полный URL — берём только pathname.
-    path = new URL(url, "http://localhost").pathname;
-  } catch {
-    // уже путь — оставляем как есть
-  }
-  return path.replace(/^\/room\/[^/]+/, "/room/[code]");
-}
 
 /** Инициализация posthog-js. No-op, если нет ключа или мы не в браузере. */
 export function initAnalytics(): void {

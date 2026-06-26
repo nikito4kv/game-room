@@ -59,6 +59,7 @@ import {
   type VoiceMode,
 } from "@/lib/clientStorage";
 import { EVENTS, track } from "@/lib/analytics/posthogClient";
+import { clearRoomContext, setRoomContext } from "@/lib/observability/sentryRoom";
 import { MicProcessor } from "@/lib/audio/micProcessor";
 import { ACTION_LABELS, formatKeyCode } from "@/lib/keys";
 import { initSfx, playSfx, setSfxDeafened } from "@/lib/audio/sfx";
@@ -105,6 +106,13 @@ export default function RoomClient({ code }: { code: string }) {
   // Зависит от navigator (кодек под ОС) → считаем один раз на клиенте.
   // Пустые зависимости обязательны: стабильная ссылка не даёт LiveKit пересоздавать Room.
   const roomOptions = useMemo(() => buildRoomOptions(), []);
+  // Пометить ошибки этой комнаты хэшем кода (для корреляции в Sentry), на весь
+  // жизненный цикл страницы — включая экран входа и сбои до подключения. Снимаем
+  // тег при уходе, чтобы он не «протёк» на ошибки вне комнаты.
+  useEffect(() => {
+    setRoomContext(code);
+    return () => clearRoomContext();
+  }, [code]);
   const [nickname, setNickname] = useState<string | null>(null);
   const [nickInput, setNickInput] = useState("");
   const [join, setJoin] = useState<JoinInfo | null>(null);
