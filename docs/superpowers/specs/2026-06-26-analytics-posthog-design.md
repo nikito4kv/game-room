@@ -46,10 +46,19 @@
 ```
 Браузер ──$pageview, room_created, room_joined──► PostHog Cloud EU
                                                         ▲
-LiveKit ──webhook: joined / left / finished──► /api/livekit-webhook
-                                              │  (Upstash Redis: live / peak / uniq)
-                                              └──room_session (peak, uniq, duration)──┘
+LiveKit ──webhook: joined / finished──► /api/livekit-webhook
+                                       │  (Upstash Redis: peak / uniq)
+                                       └──room_session (peak, uniq, duration)──┘
 ```
+
+> **Реализовано (отклонения от первоначального дизайна):**
+> 1. Пик берём из `event.room.numParticipants` (приходит в `participant_joined`),
+>    поэтому свой live-счётчик и обработка `participant_left` не нужны.
+> 2. Длительность и `is_public` берём из payload `room_finished`
+>    (`event.room.creationTime`, `event.room.metadata`) — на `room_finished`
+>    комната в LiveKit уже удалена, `loadPublicMeta` вернул бы `null`.
+> 3. Клиент инициализируется через `src/instrumentation-client.ts`
+>    (`onRouterTransitionStart`), а не провайдером в `layout.tsx`.
 
 ## 4. Таксономия событий
 
@@ -59,7 +68,7 @@ LiveKit ──webhook: joined / left / finished──► /api/livekit-webhook
 |---|---|---|
 | `$pageview` | смена маршрута (`/`, `/rooms`, `/room/[code]`) | URL без точного кода комнаты |
 | `room_created` | успешный `POST /api/rooms` | `is_public`, `has_password` |
-| `room_joined` | успешный коннект к LiveKit | `entry` (`link` \| `code` \| `created`), `is_public`, `has_password` |
+| `room_joined` | успешный коннект к LiveKit | `entry` (`link` \| `code` \| `created`), `is_public` |
 
 `entry`:
 - `link` — посетитель зашёл прямо на `/room/[code]` (вход «по ссылке»);
@@ -72,8 +81,9 @@ LiveKit ──webhook: joined / left / finished──► /api/livekit-webhook
 |---|---|---|
 | `room_session` | webhook `room_finished` | `peak_participants`, `total_unique`, `duration_sec`, `is_public` |
 
-`duration_sec` = `now − meta.createdAt` (createdAt уже пишется в metadata комнаты
-при создании, см. `/api/rooms`).
+`duration_sec` = `event.createdAt − event.room.creationTime` (оба из payload
+вебхука, в секундах). На `room_finished` комната уже удалена, поэтому НЕ читаем
+её через API, а берём всё из самого события.
 
 ### Что НЕ отправляем
 
@@ -108,24 +118,27 @@ LiveKit ──webhook: joined / left / finished──► /api/livekit-webhook
   `redis.ts`, серверный-only): ключ `POSTHOG_KEY`, host EU. После `capture`
   обязательно `await flush()` — на serverless инстанс может «замёрзнуть» до
   отправки.
-- **`src/lib/analytics/roomStats.ts`** — счётчики в Upstash Redis:
-  `incrLive`, `decrLive`, обновление `peak` (через `MAX`), `addUnique` (set),
-  `readAndCleanup`. Чистая логика, покрывается тестом. Ключи: хэш
-  `gr:stats:<code>` (`live`, `peak`) + set `gr:stats:<code>:uniq`, с TTL,
-  согласованным с состоянием комнаты.
+- **`src/lib/analytics/roomStats.ts`** — статистика в Upstash Redis:
+  `recordJoin` (один атомарный Lua-`eval`: `SADD` ника, `peak = max(peak, n)`,
+  запись публичности, продление TTL), `readStats` (чтение без удаления),
+  `cleanupStats` (удаление). Чистая логика, покрывается тестом. Ключи:
+  `room:<code>:peak` (STRING), `room:<code>:uniq` (SET), `room:<code>:pub`
+  (STRING `1`/`0`), TTL = `ROOM_STATE_TTL_SECONDS` (как у состояния комнаты).
+  Чтение и удаление разделены, чтобы стирать только после успешной отправки.
 
 ### Изменения в существующем
 
 - **`src/app/api/livekit-webhook/route.ts`**:
-  - `participant_joined` → `incrLive` + обновить `peak` + `addUnique`;
-  - `participant_left` (новый кейс) → `decrLive`;
-  - `room_finished` → `readAndCleanup` → `capture room_session` → `await flush`,
-    затем существующая очистка blob/Redis.
-  - Сбои аналитики не должны валить вебхук (LiveKit иначе ретраит) — оборачиваем
-    в try/catch, как уже сделано с очисткой.
-- **`src/app/layout.tsx`** — `PostHogProvider` (client-компонент): init + ручной
-  `$pageview` на смену `usePathname` (в App Router Next 16 авто-pageview не ловит
-  клиентскую навигацию).
+  - `participant_joined` → `recordJoin(code, identity, numParticipants, isPublic)`,
+    запускается ПАРАЛЛЕЛЬНО с модерацией (не задерживает кик/мьют);
+  - `room_finished` → `readStats` → если были участники, `captureRoomSession`
+    (`await flush`) → `cleanupStats` (удаление ТОЛЬКО после успешной отправки).
+    Длительность считается из payload с защитой от невалидных меток времени.
+  - Сбои аналитики не должны валить вебхук (LiveKit иначе ретраит) — отдельные
+    try/catch, как уже сделано с очисткой.
+- **`src/instrumentation-client.ts`** (Next 15.3+) — `initAnalytics()` + первый
+  `$pageview`; `onRouterTransitionStart` шлёт `$pageview` на клиентских навигациях
+  (нормализуя `/room/<code>` → `/room/[code]`).
 - **Создание комнаты** — `room_created` в обработчике успешного `POST /api/rooms`.
 - **`src/app/room/[code]/RoomClient.tsx`** — `room_joined` после успешного
   коннекта, с вычислением `entry`.
@@ -172,17 +185,19 @@ LiveKit ──webhook: joined / left / finished──► /api/livekit-webhook
 
 ## 9. Тесты (vitest)
 
-- `roomStats.test.ts` — incr/decr/peak/unique/cleanup.
+- `roomStats.test.ts` — peak/unique/публичность/чтение-без-удаления/cleanup.
 - Роутинг вебхука: `participant_left` уменьшает счётчик; `room_finished` шлёт
   `room_session` с верными числами (PostHog-клиент мокаем).
 
 ## 10. Ручные шаги (вне кода)
 
 1. Завести проект в PostHog Cloud EU, получить ключи.
-2. В LiveKit Cloud включить webhook-событие `participant_left`
-   (убедиться, что `room_finished` и `participant_joined` уже включены).
+2. Убедиться, что в LiveKit Cloud включены webhook-события `room_finished` и
+   `participant_joined` (этого достаточно — `participant_left` НЕ нужен).
 3. Прописать env-переменные (локально и в проде).
 4. Собрать дашборды по §8.
+5. Добавить в политику конфиденциальности строку про анонимную аналитику
+   (PostHog Cloud EU, без PII).
 
 ## 11. Вне рамок (YAGNI)
 

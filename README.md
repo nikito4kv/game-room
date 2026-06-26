@@ -18,6 +18,34 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Переменные окружения
+
+Скопируй `.env.example` в `.env.local` и заполни значениями. Полный перечень
+переменных и их назначение — в самом `.env.example` (LiveKit, Upstash Redis,
+PostHog).
+
+## Аналитика (PostHog)
+
+Аналитика роста — на **PostHog Cloud EU**. Дизайн, метрики и таксономия событий
+описаны в
+[docs/superpowers/specs/2026-06-26-analytics-posthog-design.md](docs/superpowers/specs/2026-06-26-analytics-posthog-design.md).
+
+- **Дашборды** (воронки, retention-когорты, тренды) смотрим в UI PostHog. Собрать
+  их по §8 спеки: Trends (`room_session`/день, средний `peak_participants`,
+  средняя длительность, распределение пика), Funnel (`$pageview` → `room_created`
+  → `room_joined`), Retention (недельный по `room_joined`).
+- **Экспорт снимка в Markdown:**
+
+  ```bash
+  npm run analytics:export        # за последние 30 дней
+  npm run analytics:export -- 7   # за последние 7 дней
+  ```
+
+  Отчёт пишется в `analytics-export/<дата>.md` (в git не коммитится). Нужны
+  `POSTHOG_PERSONAL_API_KEY`, `POSTHOG_PROJECT_ID`, `POSTHOG_HOST` в `.env.local`.
+- Без `NEXT_PUBLIC_POSTHOG_KEY`/`POSTHOG_KEY` аналитика просто отключается —
+  локальная разработка работает без неё.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

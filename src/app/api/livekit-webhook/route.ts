@@ -4,16 +4,20 @@ import {
   getRoomService,
   getWebhookReceiver,
   loadPublicMeta,
+  parseRoomMeta,
 } from "@/lib/livekit";
 import { deleteRoomState, loadJoinChecks, touchTtl } from "@/lib/roomSecret";
+import { cleanupStats, readStats, recordJoin } from "@/lib/analytics/roomStats";
+import { captureRoomSession } from "@/lib/analytics/posthogServer";
 
-// Вебхук LiveKit. Делает две вещи:
+// Вебхук LiveKit. Делает несколько вещей:
 //  1. room_finished — комната опустела и удалилась → стираем загруженные карты
-//     из Vercel Blob и приватное состояние комнаты из Redis.
+//     из Vercel Blob и приватное состояние комнаты из Redis; снимаем накопленную
+//     статистику и шлём событие room_session в PostHog (аналитика).
 //  2. participant_joined — РЕАЛЬНОЕ принуждение бана/замка/мьюта. Проверки в
 //     /api/token можно обойти, переподключившись к LiveKit напрямую с ещё живым
 //     токеном; здесь же мы ловим участника уже на входе и применяем правила
-//     независимо от того, как он получил токен.
+//     независимо от того, как он получил токен. Плюс копим статистику комнаты.
 // Адреса/события этого эндпоинта нужно включить в настройках LiveKit Cloud
 // (events: room_finished, participant_joined).
 
@@ -53,11 +57,47 @@ export async function POST(request: Request) {
     } catch (err) {
       console.error("secret cleanup failed", err);
     }
+    // Аналитика: снимаем накопленную статистику и шлём room_session. Длительность
+    // берём из payload самого события (комнаты в LiveKit уже нет, listRooms вернул
+    // бы пусто), публичность — из payload, а если metadata там нет, из значения,
+    // сохранённого при входах. Ключи стираем ТОЛЬКО после успешной отправки: иначе
+    // при сетевом сбое событие потерялось бы (room_finished приходит один раз).
+    // Пустые комнаты (никто не зашёл) — не шлём.
+    try {
+      const stats = await readStats(code);
+      if (stats.totalUnique >= 1) {
+        const finishedAt = Number(event.createdAt ?? 0);
+        const startedAt = Number(event.room.creationTime ?? 0);
+        // Защита от мусора: длительность только при валидных метках времени.
+        const durationSec = startedAt > 0 && finishedAt >= startedAt ? finishedAt - startedAt : 0;
+        const isPublic = parseRoomMeta(event.room.metadata)?.isPublic ?? stats.isPublic;
+        await captureRoomSession({
+          code,
+          peak: stats.peak,
+          totalUnique: stats.totalUnique,
+          durationSec,
+          isPublic,
+        });
+      }
+      await cleanupStats(code);
+    } catch (err) {
+      // Не стираем ключи при сбое отправки — они истекут по TTL, данные не теряются.
+      console.error("room_session analytics failed", err);
+    }
   }
 
   if (event.event === "participant_joined" && event.room?.name && event.participant?.identity) {
     const code = event.room.name;
     const identity = event.participant.identity;
+    // Аналитика: фиксируем вход (пик по numParticipants из payload). Запускаем
+    // ПАРАЛЛЕЛЬНО с модерацией и не ждём перед ней — статистика не должна
+    // задерживать кик/мьют нарушителя. Ошибку проглатываем (не критичный путь).
+    const statsPromise = recordJoin(
+      code,
+      identity,
+      event.room.numParticipants ?? 0,
+      parseRoomMeta(event.room.metadata)?.isPublic ?? false,
+    ).catch((err) => console.error("recordJoin failed", err));
     try {
       const [meta, checks] = await Promise.all([
         loadPublicMeta(code),
@@ -94,6 +134,9 @@ export async function POST(request: Request) {
       // Не валим вебхук — иначе LiveKit будет ретраить.
       console.error("participant_joined enforcement failed", err);
     }
+    // Дожидаемся записи статистики до ответа (на serverless инстанс может
+    // «замёрзнуть» после возврата). Шла параллельно модерации, так что не тормозит кик.
+    await statsPromise;
   }
 
   return new Response("ok", { status: 200 });

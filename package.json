@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "analytics:export": "node --env-file=.env.local scripts/analytics-export.mjs"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.21",
@@ -21,6 +22,8 @@
     "livekit-client": "^2.19.2",
     "livekit-server-sdk": "^2.15.5",
     "next": "16.2.9",
+    "posthog-js": "^1.393.5",
+    "posthog-node": "^5.38.5",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

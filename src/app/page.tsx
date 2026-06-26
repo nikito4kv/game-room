@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getNickname,
+  markEntry,
   setNickname as saveNickname,
   stashHostKey,
   stashPassword,
 } from "@/lib/clientStorage";
+import { EVENTS, track } from "@/lib/analytics/posthogClient";
 import Banner from "@/components/Banner";
 import Icon from "@/components/Icon";
 
@@ -72,6 +74,11 @@ export default function Home() {
       }
       stashHostKey(data.code, data.hostKey);
       stashPassword(data.code, createPassword.trim());
+      markEntry(data.code, "created");
+      track(EVENTS.roomCreated, {
+        is_public: isPublic,
+        has_password: !!createPassword.trim(),
+      });
       router.push(`/room/${data.code}`);
     } catch {
       setError("Сеть недоступна. Попробуйте ещё раз.");
@@ -91,6 +98,7 @@ export default function Home() {
       return;
     }
     stashPassword(code, joinPassword.trim());
+    markEntry(code, "code");
     router.push(`/room/${code}`);
   }
 

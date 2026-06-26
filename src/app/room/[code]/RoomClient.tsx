@@ -52,11 +52,13 @@ import {
   setParticipantVolume,
   setShowKeys,
   setVoiceMode,
+  takeEntry,
   takePassword,
   type KeyAction,
   type Keybinds,
   type VoiceMode,
 } from "@/lib/clientStorage";
+import { EVENTS, track } from "@/lib/analytics/posthogClient";
 import { MicProcessor } from "@/lib/audio/micProcessor";
 import { ACTION_LABELS, formatKeyCode } from "@/lib/keys";
 import { initSfx, playSfx, setSfxDeafened } from "@/lib/audio/sfx";
@@ -380,6 +382,7 @@ function RoomView({
       return JSON.parse(roomInfo.metadata) as {
         hostIdentity?: string;
         locked?: boolean;
+        isPublic?: boolean;
       };
     } catch {
       return null;
@@ -487,8 +490,14 @@ function RoomView({
     if (state === ConnectionState.Connected && !enteredRef.current) {
       enteredRef.current = true;
       playSfx("enter");
+      // Аналитика. Источник входа: маркер лендинга; если его нет (новая вкладка,
+      // перезагрузка, повторный заход) — по наличию секрета хоста понимаем, что
+      // это создатель; иначе считаем входом по ссылке. has_password со стороны
+      // входящего достоверно неизвестен (хранится приватно на сервере) — не шлём.
+      const entry = takeEntry(code) ?? (getHostKey(code) ? "created" : "link");
+      track(EVENTS.roomJoined, { entry, is_public: roomMeta?.isPublic ?? false });
     }
-  }, [state]);
+  }, [state, code, roomMeta]);
   // Потеря / восстановление связи (тревога — звучит даже при «заглушить всё»).
   const prevStateRef = useRef<ConnectionState | null>(null);
   useEffect(() => {

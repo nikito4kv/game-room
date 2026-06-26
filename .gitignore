@@ -20,6 +20,9 @@
 # generated runtime assets (синхронизируются из node_modules перед dev/build)
 /public/noise-suppressor/
 
+# экспорт аналитики (локальные снимки, в git не коммитятся)
+/analytics-export/
+
 # production
 /build
 
@@ -58,6 +61,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel

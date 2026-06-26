@@ -5,6 +5,7 @@
 const NICK_KEY = "gr.nickname";
 const pwKey = (code: string) => `gr.pw.${code}`;
 const hostKeyKey = (code: string) => `gr.host.${code}`;
+const entryKey = (code: string) => `gr.entry.${code}`;
 const BOARD_COLOR_KEY = "gr.board.color";
 const BOARD_SIZE_KEY = "gr.board.size";
 
@@ -74,6 +75,25 @@ export function takePassword(code: string): string | undefined {
 }
 export function clearPassword(code: string): void {
   safeRemove(session, pwKey(code));
+}
+
+/**
+ * Источник входа в комнату — для аналитики (room_joined.entry). Помечаем на
+ * лендинге перед переходом: "created" (создал свою) или "code" (ввёл код).
+ * Прямой заход по ссылке маркера не оставляет — в комнате он трактуется как
+ * "link". Живёт в sessionStorage и считывается один раз (takeEntry стирает).
+ */
+export type RoomEntry = "created" | "code";
+export function markEntry(code: string, entry: RoomEntry): void {
+  safeSet(session, entryKey(code), entry);
+}
+export function takeEntry(code: string): RoomEntry | undefined {
+  const v = safeGet(session, entryKey(code));
+  if (v === "created" || v === "code") {
+    safeRemove(session, entryKey(code));
+    return v;
+  }
+  return undefined;
 }
 
 /**
