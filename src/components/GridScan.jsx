@@ -431,7 +431,19 @@ export const GridScan = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch (err) {
+      // WebGL может быть недоступен: старые iOS Safari, слабые GPU, исчерпан лимит
+      // одновременных контекстов. Фон чисто декоративный (aria-hidden) — тихо
+      // отключаем его, а не роняем необработанную ошибку на страницу
+      // (см. Sentry GAMEROOM-B6-5: «Error creating WebGL context» на iOS 14 Safari).
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('GridScan: WebGL недоступен, фон отключён', err);
+      }
+      return;
+    }
     rendererRef.current = renderer;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(container.clientWidth, container.clientHeight);
