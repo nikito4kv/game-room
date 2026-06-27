@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useMediaDeviceSelect } from "@livekit/components-react";
 import { supportsAudioOutputSelection } from "livekit-client";
 import {
@@ -16,14 +17,28 @@ import {
 import { playSfx, setSfxEnabled, setSfxVolume } from "@/lib/audio/sfx";
 import { startMicTest, type MicTest } from "@/lib/audio/micTest";
 import { ACTION_LABELS, formatKeyCode } from "@/lib/keys";
-import Icon from "@/components/Icon";
+import Icon, { type IconName } from "@/components/Icon";
+import ElasticSlider from "@/components/ElasticSlider";
+
+// Вкладки настроек: четыре раздела вместо одного длинного скролла. Иконки берём
+// из общего набора Icon, чтобы вкладки говорили на языке остального интерфейса.
+type TabKey = "mic" | "output" | "ui" | "controls";
+const TABS: { key: TabKey; label: string; icon: IconName }[] = [
+  { key: "mic", label: "Микрофон", icon: "mic" },
+  { key: "output", label: "Звук", icon: "volume" },
+  { key: "ui", label: "Интерфейс", icon: "chat" },
+  { key: "controls", label: "Управление", icon: "sliders" },
+];
 
 /**
- * Окно настроек звука (Этап 5a). Рендерится внутри комнаты, поэтому имеет доступ
- * к контексту LiveKit (useMediaDeviceSelect переключает реальные устройства).
+ * Окно настроек звука. Рендерится внутри комнаты, поэтому имеет доступ к контексту
+ * LiveKit (useMediaDeviceSelect переключает реальные устройства).
  *
  * Громкость приёма (masterVolume) и усиление микрофона (inputGain) живут выше —
  * сюда приходят значениями + колбэками, чтобы их видел и плеер звука, и процессор.
+ *
+ * Вид — под стиль главной: светящаяся рамка (BorderGlow), вкладки с подвижным
+ * акцентным индикатором и мягкие motion-появления секций.
  */
 export default function SettingsModal({
   onClose,
@@ -65,6 +80,38 @@ export default function SettingsModal({
   const [sfxOn, setSfxOn] = useState(getSfxEnabled);
   const [sfxVol, setSfxVol] = useState(getSfxVolume);
 
+  const [tab, setTab] = useState<TabKey>("mic");
+  const reduce = useReducedMotion();
+
+  // Движение как на главной: острая ease-out, лёгкий подъём + stagger секций.
+  // При prefers-reduced-motion гасим перемещения, оставляя только fade.
+  const ease = [0.23, 1, 0.32, 1] as const;
+  // Чистый кросс-фейд раздела: без stagger и сдвигов по Y — именно они давали
+  // «рваность». За плавность размера отвечает анимация высоты тела (ниже).
+  const panelVariants = {
+    initial: { opacity: 0 },
+    animate: { opacity: 1, transition: { duration: 0.28, ease } },
+    exit: { opacity: 0, transition: { duration: 0.18, ease } },
+  };
+  const item = {
+    initial: { opacity: 1 },
+    animate: { opacity: 1 },
+  };
+
+  // Плавная высота тела: меряем реальную высоту активного раздела (ResizeObserver)
+  // и пружиним к ней внешний слой — окно «расширяется», а не прыгает на новый
+  // размер. measureRef лежит внутри overflow-hidden обёртки, поэтому анимация
+  // высоты обёртки не влияет на его натуральную высоту → нет петли наблюдателя.
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [bodyHeight, setBodyHeight] = useState<number | "auto">("auto");
+  useEffect(() => {
+    const el = measureRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBodyHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Закрытие по Esc.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -76,219 +123,273 @@ export default function SettingsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <motion.div
         role="dialog"
         aria-modal="true"
         aria-label="Настройки звука"
-        className="modal"
         onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: reduce ? 1 : 0.96, y: reduce ? 0 : 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.24, ease }}
+        className="w-full max-w-lg"
       >
-        <header className="settings-header">
-          <h2 className="flex items-center gap-2 text-lg font-bold">
-            <Icon name="sliders" size={22} className="text-accent-hi" />
-            Настройки звука
-          </h2>
-          <button onClick={onClose} aria-label="Закрыть" className="btn btn--ghost btn--icon">
-            <Icon name="close" />
-          </button>
-        </header>
-
-        {/* ── Микрофон ─────────────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <h3 className="panel-h flex items-center gap-2">
-            <Icon name="mic" size={15} /> Микрофон
-          </h3>
-
-          <div className="settings-card">
-            <label className="field-label">
-              Устройство
-              <select
-                value={micSel.activeDeviceId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  void micSel.setActiveMediaDevice(id);
-                  setInputDevice(id);
-                }}
-                className="field"
-              >
-                {micSel.devices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || "Микрофон"}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <Slider
-              label="Громкость микрофона"
-              value={Math.round(inputGain * 100)}
-              min={0}
-              max={200}
-              onChange={(v) => onChangeInputGain(v / 100)}
-              suffix="%"
-            />
-
-            <SettingRow
-              title="Шумоподавление"
-              desc="Убирает дыхание, клавиатуру и фоновый шум"
-            >
-              <Toggle
-                checked={noiseSuppression}
-                onChange={onChangeNoiseSuppression}
-                label="Шумоподавление"
-              />
-            </SettingRow>
-          </div>
-
-          <MicTester deviceId={micSel.activeDeviceId} gain={inputGain} />
-        </section>
-
-        {/* ── Вывод ────────────────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <h3 className="panel-h flex items-center gap-2">
-            <Icon name="volume" size={15} /> Звук участников
-          </h3>
-
-          <div className="settings-card">
-            {canPickOutput ? (
-              <label className="field-label">
-                Устройство вывода
-                <select
-                  value={spkSel.activeDeviceId}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    void spkSel.setActiveMediaDevice(id);
-                    setOutputDevice(id);
-                  }}
-                  className="field"
+        <div className="settings-panel">
+          {/* Шапка + вкладки зафиксированы сверху; тело прокручивается под ними. */}
+          <div className="settings-head">
+              <header className="settings-header">
+                <h2 className="flex items-center gap-2 text-lg font-bold">
+                  <Icon name="sliders" size={22} className="text-accent-hi" />
+                  Настройки звука
+                </h2>
+                <button
+                  onClick={onClose}
+                  aria-label="Закрыть"
+                  className="btn btn--ghost btn--icon"
                 >
-                  {spkSel.devices.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || "Устройство вывода"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <p className="text-xs text-text-mute">
-                Выбор устройства вывода не поддерживается этим браузером.
-              </p>
-            )}
+                  <Icon name="close" />
+                </button>
+              </header>
 
-            <Slider
-              label="Общая громкость"
-              value={Math.round(masterVolume * 100)}
-              min={0}
-              max={100}
-              onChange={(v) => onChangeMasterVolume(v / 100)}
-              suffix="%"
-            />
+              <div className="settings-tabs" role="tablist" aria-label="Разделы настроек">
+                {TABS.map((t) => {
+                  const active = tab === t.key;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setTab(t.key)}
+                      className={"settings-tab" + (active ? " is-active" : "")}
+                    >
+                      {active && (
+                        <motion.span
+                          layoutId="settingsTabPill"
+                          className="settings-tab__pill"
+                          transition={{ type: "spring", stiffness: 360, damping: 32 }}
+                        />
+                      )}
+                      <span className="settings-tab__in">
+                        <Icon name={t.icon} size={15} />
+                        <span>{t.label}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Тело вкладки: внешний слой пружинит до высоты активного раздела,
+                разделы кросс-фейдят поверх через popLayout (уходящий «выпадает»
+                из потока, поэтому высота не схлопывается в ноль). */}
+            <div className="settings-body">
+              <motion.div
+                animate={{ height: bodyHeight }}
+                transition={reduce ? { duration: 0 } : { duration: 0.34, ease }}
+                style={{ overflow: "hidden" }}
+              >
+                <div ref={measureRef} style={{ position: "relative" }}>
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.div
+                      key={tab}
+                      role="tabpanel"
+                      variants={panelVariants}
+                      initial="initial"
+                      animate="animate"
+                      exit="exit"
+                      className="flex flex-col gap-3"
+                    >
+                  {tab === "mic" && (
+                    <>
+                      <motion.div variants={item} className="settings-card">
+                        <label className="field-label">
+                          Устройство
+                          <select
+                            value={micSel.activeDeviceId}
+                            onChange={(e) => {
+                              const id = e.target.value;
+                              void micSel.setActiveMediaDevice(id);
+                              setInputDevice(id);
+                            }}
+                            className="field"
+                          >
+                            {micSel.devices.map((d) => (
+                              <option key={d.deviceId} value={d.deviceId}>
+                                {d.label || "Микрофон"}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <Slider
+                          label="Громкость микрофона"
+                          value={Math.round(inputGain * 100)}
+                          min={0}
+                          max={200}
+                          onChange={(v) => onChangeInputGain(v / 100)}
+                          suffix="%"
+                        />
+
+                        <SettingRow
+                          title="Шумоподавление"
+                          desc="Убирает дыхание, клавиатуру и фоновый шум"
+                        >
+                          <Toggle
+                            checked={noiseSuppression}
+                            onChange={onChangeNoiseSuppression}
+                            label="Шумоподавление"
+                          />
+                        </SettingRow>
+                      </motion.div>
+
+                      <motion.div variants={item}>
+                        <MicTester deviceId={micSel.activeDeviceId} gain={inputGain} />
+                      </motion.div>
+                    </>
+                  )}
+
+                  {tab === "output" && (
+                    <>
+                      <motion.div variants={item} className="settings-card">
+                        {canPickOutput ? (
+                          <label className="field-label">
+                            Устройство вывода
+                            <select
+                              value={spkSel.activeDeviceId}
+                              onChange={(e) => {
+                                const id = e.target.value;
+                                void spkSel.setActiveMediaDevice(id);
+                                setOutputDevice(id);
+                              }}
+                              className="field"
+                            >
+                              {spkSel.devices.map((d) => (
+                                <option key={d.deviceId} value={d.deviceId}>
+                                  {d.label || "Устройство вывода"}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : (
+                          <p className="text-xs text-text-mute">
+                            Выбор устройства вывода не поддерживается этим браузером.
+                          </p>
+                        )}
+
+                        <Slider
+                          label="Общая громкость"
+                          value={Math.round(masterVolume * 100)}
+                          min={0}
+                          max={100}
+                          onChange={(v) => onChangeMasterVolume(v / 100)}
+                          suffix="%"
+                        />
+                      </motion.div>
+                      <motion.p variants={item} className="text-xs text-text-mute">
+                        Громкость каждого участника отдельно настраивается в списке отряда.
+                      </motion.p>
+                    </>
+                  )}
+
+                  {tab === "ui" && (
+                    <motion.div variants={item} className="settings-card">
+                      <SettingRow
+                        title="Звуки интерфейса"
+                        desc="Клики, вход и выход, уведомления"
+                      >
+                        <Toggle
+                          checked={sfxOn}
+                          onChange={(on) => {
+                            setSfxOn(on);
+                            setSfxEnabled(on);
+                            if (on) playSfx("mic-on", { urgent: true }); // короткий предпросмотр
+                          }}
+                          label="Звуки интерфейса"
+                        />
+                      </SettingRow>
+
+                      {sfxOn && (
+                        <Slider
+                          label="Громкость звуков"
+                          value={Math.round(sfxVol * 100)}
+                          min={0}
+                          max={100}
+                          onChange={(v) => {
+                            const vol = v / 100;
+                            setSfxVol(vol);
+                            setSfxVolume(vol);
+                            playSfx("mic-on", { urgent: true }); // слышно выбранный уровень
+                          }}
+                          suffix="%"
+                        />
+                      )}
+                    </motion.div>
+                  )}
+
+                  {tab === "controls" && (
+                    <>
+                      <motion.div variants={item} className="settings-card">
+                        <SettingRow
+                          title="Режим голоса"
+                          desc={
+                            voiceMode === "ptt"
+                              ? "Рация: держите клавишу, чтобы говорить"
+                              : "Открытый микрофон: передаёт постоянно"
+                          }
+                        >
+                          <Segmented
+                            value={voiceMode}
+                            onChange={onChangeVoiceMode}
+                            options={[
+                              { value: "toggle", label: "Открытый" },
+                              { value: "ptt", label: "Рация" },
+                            ]}
+                          />
+                        </SettingRow>
+
+                        <SettingRow
+                          title="Показывать клавиши"
+                          desc="Буква бинда в углу кнопок управления"
+                        >
+                          <Toggle
+                            checked={showKeys}
+                            onChange={onChangeShowKeys}
+                            label="Показывать клавиши"
+                          />
+                        </SettingRow>
+                      </motion.div>
+
+                      {/* Привязки клавиш. Рацию показываем только в её режиме. */}
+                      <motion.div variants={item} className="settings-card">
+                        {(Object.keys(ACTION_LABELS) as KeyAction[])
+                          .filter((a) => a !== "ptt" || voiceMode === "ptt")
+                          .map((action) => (
+                            <BindRow
+                              key={action}
+                              action={action}
+                              binds={binds}
+                              onChangeBinds={onChangeBinds}
+                            />
+                          ))}
+                      </motion.div>
+
+                      <motion.button
+                        variants={item}
+                        type="button"
+                        onClick={() => onChangeBinds(DEFAULT_KEYBINDS)}
+                        className="btn btn--ghost btn--sm self-start"
+                      >
+                        Сбросить к умолчанию
+                      </motion.button>
+                    </>
+                  )}
+                    </motion.div>
+                  </AnimatePresence>
+                </div>
+              </motion.div>
+            </div>
           </div>
-          <p className="text-xs text-text-mute">
-            Громкость каждого участника отдельно настраивается в списке отряда.
-          </p>
-        </section>
-
-        {/* ── Звуки интерфейса ─────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <h3 className="panel-h flex items-center gap-2">
-            <Icon name="volume" size={15} /> Интерфейс
-          </h3>
-
-          <div className="settings-card">
-            <SettingRow
-              title="Звуки интерфейса"
-              desc="Клики, вход и выход, уведомления"
-            >
-              <Toggle
-                checked={sfxOn}
-                onChange={(on) => {
-                  setSfxOn(on);
-                  setSfxEnabled(on);
-                  if (on) playSfx("mic-on", { urgent: true }); // короткий предпросмотр
-                }}
-                label="Звуки интерфейса"
-              />
-            </SettingRow>
-
-            {sfxOn && (
-              <Slider
-                label="Громкость звуков"
-                value={Math.round(sfxVol * 100)}
-                min={0}
-                max={100}
-                onChange={(v) => {
-                  const vol = v / 100;
-                  setSfxVol(vol);
-                  setSfxVolume(vol);
-                  playSfx("mic-on", { urgent: true }); // слышно выбранный уровень
-                }}
-                suffix="%"
-              />
-            )}
-          </div>
-        </section>
-
-        {/* ── Управление ───────────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <h3 className="panel-h flex items-center gap-2">
-            <Icon name="sliders" size={15} /> Управление
-          </h3>
-
-          <div className="settings-card">
-            <SettingRow
-              title="Режим голоса"
-              desc={
-                voiceMode === "ptt"
-                  ? "Рация: держите клавишу, чтобы говорить"
-                  : "Открытый микрофон: передаёт постоянно"
-              }
-            >
-              <Segmented
-                value={voiceMode}
-                onChange={onChangeVoiceMode}
-                options={[
-                  { value: "toggle", label: "Открытый" },
-                  { value: "ptt", label: "Рация" },
-                ]}
-              />
-            </SettingRow>
-
-            <SettingRow
-              title="Показывать клавиши"
-              desc="Буква бинда в углу кнопок управления"
-            >
-              <Toggle
-                checked={showKeys}
-                onChange={onChangeShowKeys}
-                label="Показывать клавиши"
-              />
-            </SettingRow>
-          </div>
-
-          {/* Привязки клавиш. Рацию показываем только в её режиме. */}
-          <div className="settings-card">
-            {(Object.keys(ACTION_LABELS) as KeyAction[])
-              .filter((a) => a !== "ptt" || voiceMode === "ptt")
-              .map((action) => (
-                <BindRow
-                  key={action}
-                  action={action}
-                  binds={binds}
-                  onChangeBinds={onChangeBinds}
-                />
-              ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => onChangeBinds(DEFAULT_KEYBINDS)}
-            className="btn btn--ghost btn--sm self-start"
-          >
-            Сбросить к умолчанию
-          </button>
-        </section>
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -449,7 +550,7 @@ function SettingRow({
   );
 }
 
-/** Ползунок с подписью и моноширинным отсчётом; дорожка залита до --fill. */
+/** Ползунок с подписью и моноширинным отсчётом; внутри — упругий ElasticSlider. */
 function Slider({
   label,
   value,
@@ -465,9 +566,8 @@ function Slider({
   onChange: (v: number) => void;
   suffix?: string;
 }) {
-  const fill = ((value - min) / (max - min)) * 100;
   return (
-    <label className="flex flex-col gap-2 text-sm text-text-dim">
+    <div className="flex flex-col gap-2 text-sm text-text-dim">
       <span className="flex items-center justify-between">
         {label}
         <span className="settings-readout">
@@ -475,17 +575,18 @@ function Slider({
           {suffix}
         </span>
       </span>
-      <input
-        type="range"
-        className="range"
-        min={min}
-        max={max}
-        step={5}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ "--fill": `${fill}%` } as CSSProperties}
+      <ElasticSlider
+        className="w-full"
+        startingValue={min}
+        maxValue={max}
+        defaultValue={value}
+        isStepped
+        stepSize={5}
+        onChange={onChange}
+        ariaLabel={label}
+        valueSuffix={suffix}
       />
-    </label>
+    </div>
   );
 }
 

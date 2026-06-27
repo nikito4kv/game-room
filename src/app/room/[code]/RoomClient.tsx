@@ -70,6 +70,7 @@ import RoomChat from "./RoomChat";
 import Killfeed from "./Killfeed";
 import Banner from "@/components/Banner";
 import Icon, { type IconName } from "@/components/Icon";
+import ElasticSlider from "@/components/ElasticSlider";
 import { plural } from "@/lib/plural";
 import { buildRoomOptions, SCREEN_SHARE_CAPTURE } from "@/lib/screenShare";
 
@@ -1498,16 +1499,19 @@ function ParticipantMenu({
           <span>Громкость</span>
           <span style={{ color: "var(--text)" }}>{Math.round(volume * 100)}%</span>
         </div>
-        <input
-          type="range"
-          min={0}
-          max={200}
-          step={5}
-          value={Math.round(volume * 100)}
-          onChange={(e) => onChangeVolume(Number(e.target.value) / 100)}
+        <ElasticSlider
+          className="w-full"
+          startingValue={0}
+          maxValue={200}
+          defaultValue={Math.round(volume * 100)}
+          isStepped
+          stepSize={5}
           disabled={muted}
-          aria-label="Громкость участника"
-          style={{ width: "100%" }}
+          onChange={(v) => onChangeVolume(v / 100)}
+          ariaLabel="Громкость участника"
+          valueSuffix="%"
+          leftIcon={<Icon name="volume-off" size={16} />}
+          rightIcon={<Icon name="volume" size={16} />}
         />
       </div>
       <button role="menuitem" onClick={onToggleMute} className="menu-item">

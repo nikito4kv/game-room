@@ -56,6 +56,10 @@
 html {
   /* масштаб интерфейса (слайдер 0.75–1.5 живёт в настройках, см. tokens.css) */
   font-size: calc(100% * var(--ui-scale, 1));
+  /* Гасим горизонтальный скролл от декоративных свечений (см. подробный коммент
+     у body). Нужно и на html, и на body: только пара clip надёжно убирает
+     прокрутку вьюпорта в этой раскладке. */
+  overflow-x: clip;
 }
 
 body {
@@ -65,6 +69,14 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Декоративные «свечения» (BorderGlow с inset: -40px и т.п.) намеренно
+     выходят за края карточек и на узких экранах вылезали бы за вьюпорт, давая
+     горизонтальный скролл. Клипуем по горизонтали на body (его overflow
+     пробрасывается на вьюпорт, т.к. у html overflow по умолчанию visible):
+     clip, а не hidden, гасит только горизонталь и не создаёт скролл-контейнер —
+     вертикальная прокрутка и position: fixed-фоны (WebGL-сетка, body::before)
+     работают как прежде. */
+  overflow-x: clip;
 }
 
 /* Очень сдержанная атмосферная подсветка сверху — глубина без «громкости».
@@ -132,9 +144,12 @@ input[type="checkbox"] {
    Аккуратное, без «рамок» вокруг вкладок: вкладки — это текст, активная
    подсвечена акцентом и тонкой чертой снизу (эхо .panel--accent). Тонкая
    нижняя линия бара отделяет навигацию от контента, но не обводит её. */
+/* Плавающая «стеклянная» панель: полупрозрачный фон + blur пропускают и
+   подкрашивают анимацию сетки (GridScan) снизу. Паттерн — как .dock/.chat-panel,
+   но прозрачнее (фон ~58%), чтобы фон реально просвечивал. */
 .site-nav {
   width: 100%;
-  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem 0; /* плавает сверху с боковыми и верхним зазором */
 }
 .site-nav-inner {
   max-width: 64rem; /* совпадает с витриной (max-w-5xl) */
@@ -142,7 +157,12 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  padding: 0.625rem 1.5rem;
+  padding: 0.625rem 1.25rem;
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  backdrop-filter: blur(10px);
 }
 .site-brand {
   font-family: var(--font-display);
@@ -405,6 +425,75 @@ input[type="checkbox"] {
   gap: 0.375rem;
   font-size: 0.875rem;
   color: var(--text-dim);
+}
+
+/* --- OTP-поле кода комнаты (база — пакет input-otp, перекрашен под токены) -
+   Отдельные ячейки: каждая цифра/буква кода в своём «колодце». Активная ячейка
+   получает акцентную рамку и кольцо фокуса (--ring), как .field:focus. */
+.otp {
+  display: flex;
+  width: 100%;
+  /* input-otp намеренно делает скрытый <input> шире на 40px (width: calc(100% +
+     40px)) для отслеживания каретки и прячет лишнее clip-path'ом. Но этот выступ
+     всё равно учитывается в scrollWidth и давал горизонтальный скролл внутри
+     карточки. Клипуем выступ по горизонтали; 4px боковых отступа — чтобы не
+     срезать кольцо фокуса крайних ячеек (--ring = 3px). overflow-y оставляем
+     видимым, чтобы кольцо сверху/снизу было целым. */
+  overflow-x: clip;
+  padding-inline: 4px;
+}
+.otp:has(input:disabled) {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.otp-group {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+}
+.otp-slot {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 52px;
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+  background: var(--inset);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius);
+  transition:
+    border-color var(--motion-fast) var(--ease),
+    box-shadow var(--motion-fast) var(--ease),
+    background var(--motion-fast) var(--ease);
+}
+.otp-slot[data-filled="true"] {
+  border-color: var(--border-strong);
+}
+.otp-slot[data-active="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--inset));
+  box-shadow: var(--ring);
+}
+/* Мигающая «каретка» в активной пустой ячейке. */
+.otp-caret {
+  width: 2px;
+  height: 1.4rem;
+  border-radius: 1px;
+  background: var(--accent-hi);
+  animation: otp-caret 1s var(--ease-in-out) infinite;
+}
+@keyframes otp-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .otp-caret { animation: none; }
 }
 
 /* --- Панель / карточка ---------------------------------------------------- */
@@ -1575,6 +1664,15 @@ a.lobby-row:active {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* Смена шага в окне лобби (выбор → создать/войти и обратно): короткое всплытие.
+   Ремонтируется по key={step} в page.tsx, поэтому проигрывается на каждом шаге. */
+@keyframes step-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.step-in {
+  animation: step-in var(--motion) var(--ease-out) both;
+}
 
 /* ===========================================================================
    ДОСТУПНОСТЬ: уважение к prefers-reduced-motion.
@@ -1601,5 +1699,128 @@ a.lobby-row:active {
   .field:hover {
     background: var(--surface-2);
     border-color: var(--border);
+  }
+}
+
+/* ===========================================================================
+   НАСТРОЙКИ v2: вкладки + «прилипающая» шапка под стиль главной (BorderGlow).
+   Оболочка модалки — единственный скроллер; шапка и вкладки прилипают к верху.
+   =========================================================================== */
+/* Панель настроек: единый скруглённый контейнер с ровным акцентным свечением
+   в палитре главной. overflow:hidden гарантирует ровные углы (без квадратных
+   стыков); шапка фиксирована, тело прокручивается и плавно меняет высоту. */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    var(--shadow-2),
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 0 38px -10px color-mix(in srgb, var(--accent) 42%, transparent);
+  transition: box-shadow var(--motion) var(--ease);
+}
+@media (hover: hover) {
+  .settings-panel:hover {
+    box-shadow:
+      var(--shadow-2),
+      0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
+      0 0 60px -8px color-mix(in srgb, var(--accent) 58%, transparent);
+  }
+}
+/* Шапка + вкладки: зафиксированы сверху (flex:none), тело уезжает под них. */
+.settings-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.25rem 1.5rem 0.875rem;
+  border-bottom: 1px solid var(--border);
+}
+/* Внутри шапки своя линия не нужна — отделяет уже .settings-head. */
+.settings-head .settings-header {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  padding: 1.125rem 1.5rem 1.5rem;
+  overflow-y: auto;
+  max-height: 62vh;
+}
+
+/* Полоса вкладок — пилюля-«колодец», как .segmented, но с подвижным индикатором
+   (motion layoutId). Активная вкладка подсвечена акцентом со свечением скина. */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+.settings-tab {
+  position: relative;
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-mute);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--motion) var(--ease);
+}
+.settings-tab:hover {
+  color: var(--text-dim);
+}
+.settings-tab.is-active {
+  color: var(--on-accent);
+}
+/* Перебиваем глобальный border-radius:2px у :focus-visible — вкладка-пилюля. */
+.settings-tab:focus-visible {
+  outline: none;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--ring);
+}
+.settings-tab__in {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-tab__pill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--glow-accent);
+}
+
+/* Карточки настроек оживают на наведении — мягкая акцентная рамка + подъём тени,
+   в духе hover-эффектов главной. Правила аддитивные (базовый .settings-card выше). */
+.settings-card {
+  transition:
+    border-color var(--motion) var(--ease),
+    box-shadow var(--motion) var(--ease);
+}
+@media (hover: hover) {
+  .settings-card:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-1);
   }
 }

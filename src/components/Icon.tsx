@@ -30,6 +30,7 @@ export type IconName =
   | "check"
   | "dots"
   | "plus"
+  | "arrow-left"
   | "refresh"
   | "search"
   | "chat"
@@ -194,6 +195,12 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <line x1="12" y1="5" x2="12" y2="19" />
       <line x1="5" y1="12" x2="19" y2="12" />
+    </>
+  ),
+  "arrow-left": (
+    <>
+      <line x1="20" y1="12" x2="5" y2="12" />
+      <path d="M11 6 5 12l6 6" />
     </>
   ),
   refresh: (

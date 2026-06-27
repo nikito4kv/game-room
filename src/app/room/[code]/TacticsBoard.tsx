@@ -32,6 +32,7 @@ import {
 } from "@/lib/clientStorage";
 import Banner from "@/components/Banner";
 import Icon from "@/components/Icon";
+import ElasticSlider from "@/components/ElasticSlider";
 import { playSfx } from "@/lib/audio/sfx";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
@@ -645,16 +646,20 @@ export default function TacticsBoard({
           <Icon name="eraser" size={15} /> Ластик
         </button>
 
-        <label className="flex items-center gap-2 text-sm text-text-dim">
+        <div className="flex items-center gap-2 text-sm text-text-dim">
           Толщина
-          <input
-            type="range"
-            min={MIN_SIZE}
-            max={MAX_SIZE}
-            value={size}
-            onChange={(e) => changeSize(Number(e.target.value))}
+          <ElasticSlider
+            className="w-32"
+            startingValue={MIN_SIZE}
+            maxValue={MAX_SIZE}
+            defaultValue={size}
+            isStepped
+            stepSize={1}
+            showValue
+            onChange={changeSize}
+            ariaLabel="Толщина кисти"
           />
-        </label>
+        </div>
 
         <button onClick={clearBoard} className="btn btn--sm">
           <Icon name="trash" size={15} /> Очистить
