@@ -12,14 +12,19 @@ import {
   MAX_ID_LEN,
   MAX_POINTS_PER_STROKE,
   MAX_STROKES,
+  MAX_FIGURES,
   quantizeCoord,
   safeColor,
+  safeLabel,
   sanitizeBgUrl,
   sanitizeClock,
+  sanitizeFigure,
+  sanitizeFigures,
   sanitizePoints,
   sanitizeStrokes,
   type ArrowStyle,
   type BoardMessage,
+  type Figure,
   type Point,
   type Stroke,
   type StrokeMode,
@@ -36,6 +41,8 @@ import Icon from "@/components/Icon";
 import { playSfx } from "@/lib/audio/sfx";
 import BoardRail, { type Tool } from "./BoardRail";
 import MapPicker from "./MapPicker";
+import FigureLayer from "./FigureLayer";
+import { genFigureId, nextFigureNumber } from "@/lib/boardFigures";
 import type { GameMap } from "@/lib/maps";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
@@ -86,6 +93,18 @@ export default function TacticsBoard({
   // Пропорции загруженной карты — задаём их рамке, чтобы фон не letterbox-ился и
   // линии (нормированные к рамке) совпадали с картой при любом соотношении сторон.
   const [bgAspect, setBgAspect] = useState<number | null>(null);
+
+  // Фигурки-игроки. Источник правды для onMessage — ref; для рендера — state.
+  const [figures, setFigures] = useState<Figure[]>([]);
+  const figuresRef = useRef<Figure[]>([]);
+  const [selectedFigId, setSelectedFigId] = useState<string | null>(null);
+  const figSeq = useRef(0);
+  // Буфер позиций для батч-отправки fig-move на кадре (драг не флудит канал).
+  const figMovePending = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const figRafRef = useRef<number | null>(null);
+  useEffect(() => {
+    figuresRef.current = figures;
+  }, [figures]);
 
   // Инструмент. Цвет/толщина — также в localStorage (восстановим при входе).
   const [tool, setTool] = useState<Tool>("draw");
@@ -188,6 +207,20 @@ export default function TacticsBoard({
     for (const s of strokesRef.current) drawStrokeFrom(ctx, s, canvas.width, canvas.height, 0);
   }, [drawStrokeFrom]);
 
+  // Догнать чужую эпоху: пропустили «Очистить» — поднимаем epoch и чистим ВСЕ
+  // слои (штрихи + фигурки), иначе стёртое «воскресло» бы после ближайшего redraw.
+  const catchUpEpoch = useCallback(
+    (e: number) => {
+      epochRef.current = e;
+      strokesRef.current = [];
+      activeRef.current = null;
+      setFigures([]);
+      setSelectedFigId(null);
+      redraw();
+    },
+    [redraw],
+  );
+
   // Буфер холста должен совпадать по размеру (и пропорциям) с контейнером, иначе
   // рисунок растянется. Подгоняем размер и перерисовываем.
   const syncSize = useCallback(() => {
@@ -255,7 +288,14 @@ export default function TacticsBoard({
       const MAX_POINTS = 1500; // ~25 КБ JSON при 4 знаках на координату — под лимит
       // 1) Заголовок: эпоха + фон. Доедет даже при пустой доске и синхронит epoch/bg.
       broadcast(
-        { t: "sync-state", epoch: epochRef.current, strokes: [], bg: bgRef.current, bgVer: bgVerRef.current },
+        {
+          t: "sync-state",
+          epoch: epochRef.current,
+          strokes: [],
+          bg: bgRef.current,
+          bgVer: bgVerRef.current,
+          figures: figuresRef.current,
+        },
         [to],
       );
       // 2) Штрихи батчами по числу точек.
@@ -302,13 +342,7 @@ export default function TacticsBoard({
           const pts = sanitizePoints(msg.points);
           if (pts.length === 0 || typeof msg.id !== "string" || !msg.id || msg.id.length > MAX_ID_LEN)
             break;
-          if (e > epochRef.current) {
-            // мы пропустили чью-то «Очистить» — догоняем эпоху и чистим доску
-            epochRef.current = e;
-            strokesRef.current = [];
-            activeRef.current = null;
-            redraw();
-          }
+          if (e > epochRef.current) catchUpEpoch(e); // пропустили «Очистить» — догоняем
           const list = strokesRef.current;
           let s = list.find((x) => x.id === msg.id);
           if (!s) {
@@ -339,12 +373,47 @@ export default function TacticsBoard({
         case "clear": {
           const e = sanitizeClock(msg.epoch);
           if (e === null) break; // битый epoch — игнор
+          if (e > epochRef.current) catchUpEpoch(e); // чистит штрихи + фигурки
+          break;
+        }
+        case "fig-add": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) catchUpEpoch(e);
+          const fig = sanitizeFigure(msg.fig);
+          if (!fig) break;
+          // upsert по id: и создание, и правка команды/подписи/позиции.
+          setFigures((prev) => {
+            const i = prev.findIndex((f) => f.id === fig.id);
+            if (i !== -1) {
+              const n = prev.slice();
+              n[i] = fig;
+              return n;
+            }
+            if (prev.length >= MAX_FIGURES) return prev; // потолок
+            return [...prev, fig];
+          });
+          break;
+        }
+        case "fig-move": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
           if (e > epochRef.current) {
-            epochRef.current = e;
-            strokesRef.current = [];
-            activeRef.current = null; // прерываем и свой штрих, если рисовали
-            redraw();
+            catchUpEpoch(e);
+            break;
           }
+          if (typeof msg.id !== "string") break;
+          if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) break;
+          const x = clamp01(msg.x);
+          const y = clamp01(msg.y);
+          setFigures((prev) => prev.map((f) => (f.id === msg.id ? { ...f, x, y } : f)));
+          break;
+        }
+        case "fig-del": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (typeof msg.id !== "string") break;
+          setFigures((prev) => prev.filter((f) => f.id !== msg.id));
           break;
         }
         case "bg": {
@@ -368,7 +437,8 @@ export default function TacticsBoard({
         case "sync-req": {
           // Отвечаем снимком только если доске есть что отдать, адресно автору.
           const id = raw.from?.identity;
-          if (id && (strokesRef.current.length > 0 || bgRef.current)) sendSnapshot(id);
+          if (id && (strokesRef.current.length > 0 || bgRef.current || figuresRef.current.length > 0))
+            sendSnapshot(id);
           break;
         }
         case "sync-state": {
@@ -379,6 +449,7 @@ export default function TacticsBoard({
             if (e > epochRef.current) {
               epochRef.current = e;
               strokesRef.current = [];
+              setFigures([]);
               changed = true;
             }
             // Слияние по id: не теряем своё, безопасно при reconnect и частями.
@@ -396,6 +467,17 @@ export default function TacticsBoard({
                 changed = true;
               }
             }
+          }
+          // Фигурки из снапшота — слияние по id (не старее нашей последней очистки).
+          if (msg.figures && e !== null && e >= epochRef.current) {
+            const incoming = sanitizeFigures(msg.figures);
+            setFigures((prev) => {
+              const byId = new Map(prev.map((f) => [f.id, f]));
+              for (const f of incoming) {
+                if (byId.size < MAX_FIGURES || byId.has(f.id)) byId.set(f.id, f);
+              }
+              return Array.from(byId.values());
+            });
           }
           // Фон — по своей версии, независимо от epoch. Невалидный непустой URL
           // игнорируем без сдвига версии (не затираем уже показанный фон).
@@ -422,7 +504,7 @@ export default function TacticsBoard({
         }
       }
     },
-    [redraw, paintStroke, applyBg, sendSnapshot],
+    [redraw, paintStroke, applyBg, sendSnapshot, catchUpEpoch],
   );
 
   const { send } = useDataChannel(BOARD_TOPIC, onMessage);
@@ -493,8 +575,86 @@ export default function TacticsBoard({
   useEffect(() => {
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      if (figRafRef.current != null) cancelAnimationFrame(figRafRef.current);
     };
   }, []);
+
+  // --- Фигурки: добавление, правка подписи, перемещение, удаление ---
+  const addFigure = useCallback(
+    (team: "ct" | "t") => {
+      const fig: Figure = {
+        id: genFigureId(identityRef.current, figSeq.current++),
+        team,
+        label: String(nextFigureNumber(figuresRef.current, team)),
+        x: 0.5,
+        y: 0.5, // в центр доски
+      };
+      setFigures((prev) => (prev.length >= MAX_FIGURES ? prev : [...prev, fig]));
+      broadcast({ t: "fig-add", epoch: epochRef.current, fig });
+    },
+    [broadcast],
+  );
+
+  // Правка подписи = повторный fig-add (upsert по id). Чистим подпись санитайзером.
+  const editFigureLabel = useCallback(
+    (id: string, label: string) => {
+      const cur = figuresRef.current.find((f) => f.id === id);
+      if (!cur) return;
+      const fig: Figure = { ...cur, label: safeLabel(label) };
+      setFigures((prev) => prev.map((f) => (f.id === id ? fig : f)));
+      broadcast({ t: "fig-add", epoch: epochRef.current, fig });
+    },
+    [broadcast],
+  );
+
+  // Во время драга: локально — сразу (плавно), по сети — батчем на следующий кадр.
+  const flushFigMoves = useCallback(() => {
+    figRafRef.current = null;
+    for (const [id, p] of figMovePending.current) {
+      broadcast({ t: "fig-move", epoch: epochRef.current, id, x: p.x, y: p.y });
+    }
+    figMovePending.current.clear();
+  }, [broadcast]);
+
+  const moveFigureLive = useCallback(
+    (id: string, x: number, y: number) => {
+      setFigures((prev) => prev.map((f) => (f.id === id ? { ...f, x, y } : f)));
+      figMovePending.current.set(id, { x, y });
+      if (figRafRef.current == null) figRafRef.current = requestAnimationFrame(flushFigMoves);
+    },
+    [flushFigMoves],
+  );
+
+  const moveFigureCommit = useCallback(
+    (id: string, x: number, y: number) => {
+      setFigures((prev) => prev.map((f) => (f.id === id ? { ...f, x, y } : f)));
+      broadcast({ t: "fig-move", epoch: epochRef.current, id, x, y }); // гарантированно финальная позиция
+    },
+    [broadcast],
+  );
+
+  const deleteFigure = useCallback(
+    (id: string) => {
+      setFigures((prev) => prev.filter((f) => f.id !== id));
+      setSelectedFigId((cur) => (cur === id ? null : cur));
+      broadcast({ t: "fig-del", epoch: epochRef.current, id });
+    },
+    [broadcast],
+  );
+
+  // Delete/Backspace удаляет выделенную фигурку (если фокус не в поле ввода).
+  useEffect(() => {
+    if (!active || !selectedFigId) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Delete" && ev.key !== "Backspace") return;
+      const tag = (ev.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      ev.preventDefault();
+      deleteFigure(selectedFigId);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, selectedFigId, deleteFigure]);
 
   // --- Ввод указателем ---
   const pointFromEvent = useCallback((e: React.PointerEvent): Point => {
@@ -561,6 +721,8 @@ export default function TacticsBoard({
     epochRef.current += 1; // новая эпоха — отбрасывает поздние/повторные старые штрихи
     strokesRef.current = [];
     activeRef.current = null;
+    setFigures([]);
+    setSelectedFigId(null);
     redraw();
     playSfx("board-clear");
     broadcast({ t: "clear", epoch: epochRef.current });
@@ -671,7 +833,7 @@ export default function TacticsBoard({
           onSize={changeSize}
           arrowStyle={arrowStyle}
           onArrowStyle={setArrowStyle}
-          onAddFigure={() => {}}
+          onAddFigure={addFigure}
           onClear={clearBoard}
         />
         {amHost && (
@@ -713,6 +875,16 @@ export default function TacticsBoard({
             "absolute inset-0 h-full w-full touch-none " +
             (tool === "draw" || tool === "erase" ? "cursor-crosshair" : "pointer-events-none")
           }
+        />
+        <FigureLayer
+          figures={figures}
+          draggable={tool === "move"}
+          selectedId={selectedFigId}
+          onSelect={setSelectedFigId}
+          onMove={moveFigureLive}
+          onMoveEnd={moveFigureCommit}
+          onEditLabel={editFigureLabel}
+          onDelete={deleteFigure}
         />
       </div>
     </section>
