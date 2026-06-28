@@ -36,7 +36,12 @@ export type IconName =
   | "refresh"
   | "search"
   | "chat"
-  | "send";
+  | "send"
+  | "nade-smoke"
+  | "nade-molotov"
+  | "nade-he"
+  | "nade-flash"
+  | "nade-decoy";
 
 const PATHS: Record<IconName, ReactNode> = {
   mic: (
@@ -240,6 +245,36 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M21 4 3 11l6 2.5L21 4z" />
       <path d="M21 4 11 20l-2-6.5L21 4z" />
+    </>
+  ),
+  // облако дыма — смок
+  "nade-smoke": (
+    <path d="M6.5 16a3.5 3.5 0 0 1 .4-7 4.5 4.5 0 0 1 8.7-1.1A3.2 3.2 0 0 1 17 16z" />
+  ),
+  // язык пламени — молотов
+  "nade-molotov": (
+    <path d="M12 3c2.2 3 3.8 4.3 3.8 7.8A3.8 3.8 0 0 1 8.2 11c0-1.6.8-2.7 1.8-3.6.4 1 .9 1.5 1.8 2-.6-2.1-.1-3.9.4-6.4z" />
+  ),
+  // осколочная: корпус + рычаг
+  "nade-he": (
+    <>
+      <circle cx="12" cy="14" r="5.5" />
+      <path d="M11 8.6V6.5h3.2L16 4.8" />
+    </>
+  ),
+  // вспышка: лучи из центра
+  "nade-flash": (
+    <>
+      <circle cx="12" cy="12" r="2.4" />
+      <path d="M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21M6 6l2.4 2.4M15.6 15.6 18 18M18 6l-2.4 2.4M8.4 15.6 6 18" />
+    </>
+  ),
+  // дэкой: корпус гранаты + звуковая волна
+  "nade-decoy": (
+    <>
+      <circle cx="11" cy="13" r="5" />
+      <path d="M10 8V6h3" />
+      <path d="M17.5 9a4 4 0 0 1 0 6" />
     </>
   ),
 };
