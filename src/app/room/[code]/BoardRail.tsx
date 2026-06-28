@@ -2,15 +2,17 @@
 
 import Icon, { type IconName } from "@/components/Icon";
 import ElasticSlider from "@/components/ElasticSlider";
-import { TEAM_COLORS, type ArrowStyle } from "@/lib/board";
+import { TEAM_COLORS, type ArrowStyle, type ObjKind } from "@/lib/board";
+import { CS2_OBJECTS, objDef } from "@/lib/boardObjects";
 
-export type Tool = "move" | "draw" | "erase" | "arrow";
+export type Tool = "move" | "draw" | "erase" | "arrow" | "nade";
 
 const TOOLS: { id: Tool; icon: IconName; label: string }[] = [
   { id: "move", icon: "move", label: "Перемещение" },
   { id: "draw", icon: "pencil", label: "Кисть" },
   { id: "erase", icon: "eraser", label: "Ластик" },
   { id: "arrow", icon: "arrow", label: "Стрелка" },
+  { id: "nade", icon: "nade-he", label: "Граната" },
 ];
 
 /**
@@ -21,19 +23,22 @@ const TOOLS: { id: Tool; icon: IconName; label: string }[] = [
 export default function BoardRail({
   tool, onTool, color, presetColors, onColor,
   size, minSize, maxSize, onSize, arrowStyle, onArrowStyle,
+  objKind, onObjKind,
   onAddFigure, onClear,
 }: {
   tool: Tool; onTool: (t: Tool) => void;
   color: string; presetColors: string[]; onColor: (c: string) => void;
   size: number; minSize: number; maxSize: number; onSize: (n: number) => void;
   arrowStyle: ArrowStyle; onArrowStyle: (s: ArrowStyle) => void;
+  objKind: ObjKind; onObjKind: (k: ObjKind) => void;
   onAddFigure: (team: "ct" | "t") => void;
   onClear: () => void;
 }) {
   const showColor = tool === "draw" || tool === "arrow";
   const showSize = tool === "draw" || tool === "erase";
   const showArrowStyle = tool === "arrow";
-  const showPopover = showColor || showSize || showArrowStyle;
+  const showKinds = tool === "nade";
+  const showPopover = showColor || showSize || showArrowStyle || showKinds;
 
   return (
     <div className="pointer-events-none absolute left-2 top-2 z-[var(--z-dock,80)] flex items-start gap-2">
@@ -141,6 +146,27 @@ export default function BoardRail({
               >
                 Ротация ╴╴
               </button>
+            </div>
+          )}
+          {showKinds && (
+            <div className="flex items-center gap-1.5" role="group" aria-label="Тип гранаты">
+              {CS2_OBJECTS.map((d) => (
+                <button
+                  key={d.kind}
+                  onClick={() => onObjKind(d.kind)}
+                  aria-pressed={objKind === d.kind}
+                  title={d.name}
+                  className="flex h-8 items-center gap-1 rounded-lg px-2 text-[12px] font-semibold"
+                  style={{
+                    color: d.color,
+                    border: `1.5px solid ${d.color}${objKind === d.kind ? "" : "66"}`,
+                    background: objKind === d.kind ? `${d.color}26` : "transparent",
+                  }}
+                >
+                  <Icon name={objDef(d.kind).icon} size={15} />
+                  {d.name}
+                </button>
+              ))}
             </div>
           )}
         </div>
