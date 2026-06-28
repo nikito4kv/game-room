@@ -24,6 +24,12 @@ export type Team = "ct" | "t";
 /** Фигурка-игрок на доске. Координаты — нормированные 0..1. */
 export type Figure = { id: string; team: Team; label: string; x: number; y: number };
 
+/** Стиль стрелки: сплошная (раш) или пунктир (ротация). */
+export type ArrowStyle = "solid" | "dashed";
+
+/** Прямая стрелка между двумя точками. Координаты — нормированные 0..1. */
+export type Arrow = { id: string; color: string; style: ArrowStyle; x1: number; y1: number; x2: number; y2: number };
+
 /**
  * Сообщения, летящие по data-каналу под топиком "board".
  *
@@ -66,6 +72,8 @@ export const MAX_ID_LEN = 64;
 export const MAX_FIGURES = 50;
 /** Максимальная длина подписи фигурки. */
 export const MAX_LABEL_LEN = 16;
+/** Максимум стрелок на доске. */
+export const MAX_ARROWS = 100;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -149,6 +157,38 @@ export function sanitizeFigures(raw: unknown): Figure[] {
     const f = sanitizeFigure(r);
     if (f) out.push(f);
     if (out.length >= MAX_FIGURES) break;
+  }
+  return out;
+}
+
+function isArrowStyle(v: unknown): v is ArrowStyle {
+  return v === "solid" || v === "dashed";
+}
+
+/** Приводит произвольный объект к корректной Arrow или возвращает null. */
+export function sanitizeArrow(raw: unknown): Arrow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as Record<string, unknown>;
+  if (typeof a.id !== "string" || !a.id || a.id.length > MAX_ID_LEN) return null;
+  if (!isArrowStyle(a.style)) return null;
+  const { x1, y1, x2, y2 } = a;
+  if (!isFiniteNum(x1) || !isFiniteNum(y1) || !isFiniteNum(x2) || !isFiniteNum(y2)) return null;
+  return {
+    id: a.id,
+    color: safeColor(a.color, "#ef4444"),
+    style: a.style,
+    x1: clamp01(x1), y1: clamp01(y1), x2: clamp01(x2), y2: clamp01(y2),
+  };
+}
+
+/** Приводит входной массив стрелок к корректным Arrow[] (с кэпом MAX_ARROWS). */
+export function sanitizeArrows(raw: unknown): Arrow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Arrow[] = [];
+  for (const r of raw) {
+    const a = sanitizeArrow(r);
+    if (a) out.push(a);
+    if (out.length >= MAX_ARROWS) break;
   }
   return out;
 }

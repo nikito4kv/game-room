@@ -4,6 +4,7 @@ import {
   decodeBoardMessage,
   encodeBoardMessage,
   isHexColor,
+  MAX_ARROWS,
   MAX_CLOCK,
   MAX_FIGURES,
   MAX_ID_LEN,
@@ -13,6 +14,8 @@ import {
   quantizeCoord,
   safeColor,
   safeLabel,
+  sanitizeArrow,
+  sanitizeArrows,
   sanitizeBgUrl,
   sanitizeClock,
   sanitizeFigure,
@@ -179,5 +182,32 @@ describe("sanitizeFigures", () => {
     expect(sanitizeFigures([ok, "junk", { id: "q", team: "z", x: 0, y: 0 }])).toHaveLength(1);
     const many = Array.from({ length: MAX_FIGURES + 10 }, (_, i) => ({ ...ok, id: `p${i}` }));
     expect(sanitizeFigures(many)).toHaveLength(MAX_FIGURES);
+  });
+});
+
+describe("sanitizeArrow", () => {
+  const base = { id: "a1", color: "#ef4444", style: "solid", x1: 0.1, y1: 0.2, x2: 0.9, y2: 0.8 };
+  it("принимает корректную стрелку", () => {
+    expect(sanitizeArrow(base)).toEqual(base);
+  });
+  it("зажимает координаты и чинит цвет на дефолт", () => {
+    expect(sanitizeArrow({ ...base, color: "red", x1: 2, y2: -1 })).toEqual({
+      ...base, color: "#ef4444", x1: 1, y2: 0,
+    });
+  });
+  it("отвергает кривой стиль, id и нечисловые координаты", () => {
+    expect(sanitizeArrow({ ...base, style: "wavy" })).toBeNull();
+    expect(sanitizeArrow({ ...base, id: "" })).toBeNull();
+    expect(sanitizeArrow({ ...base, x1: "0.1" })).toBeNull();
+    expect(sanitizeArrow(42)).toBeNull();
+  });
+});
+
+describe("sanitizeArrows", () => {
+  it("фильтрует мусор и режет по MAX_ARROWS", () => {
+    const ok = { id: "a", color: "#fff", style: "dashed", x1: 0, y1: 0, x2: 1, y2: 1 };
+    expect(sanitizeArrows([ok, "x", { id: "b", style: "no" }])).toHaveLength(1);
+    const many = Array.from({ length: MAX_ARROWS + 5 }, (_, i) => ({ ...ok, id: `a${i}` }));
+    expect(sanitizeArrows(many)).toHaveLength(MAX_ARROWS);
   });
 });
