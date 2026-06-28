@@ -5,13 +5,18 @@ import {
   encodeBoardMessage,
   isHexColor,
   MAX_CLOCK,
+  MAX_FIGURES,
   MAX_ID_LEN,
+  MAX_LABEL_LEN,
   MAX_POINTS_PER_STROKE,
   MAX_STROKES,
   quantizeCoord,
   safeColor,
+  safeLabel,
   sanitizeBgUrl,
   sanitizeClock,
+  sanitizeFigure,
+  sanitizeFigures,
   sanitizePoints,
   sanitizeStroke,
   sanitizeStrokes,
@@ -140,5 +145,39 @@ describe("encode/decode round-trip", () => {
   });
   it("возвращает null на битом payload", () => {
     expect(decodeBoardMessage(new TextEncoder().encode("{не json"))).toBeNull();
+  });
+});
+
+describe("safeLabel", () => {
+  it("обрезает по длине и чистит управляющие символы", () => {
+    expect(safeLabel("  Player  ")).toBe("Player");
+    expect(safeLabel("a\n\tb")).toBe("ab");
+    expect(safeLabel("x".repeat(40))).toHaveLength(MAX_LABEL_LEN);
+    expect(safeLabel(123)).toBe("");
+    expect(safeLabel(null)).toBe("");
+  });
+});
+
+describe("sanitizeFigure", () => {
+  it("принимает корректную фигурку и зажимает координаты", () => {
+    expect(sanitizeFigure({ id: "p1", team: "ct", label: "1", x: 1.5, y: -0.2 })).toEqual({
+      id: "p1", team: "ct", label: "1", x: 1, y: 0,
+    });
+  });
+  it("отвергает кривую команду, id и нечисловые координаты", () => {
+    expect(sanitizeFigure({ id: "p1", team: "x", label: "", x: 0.5, y: 0.5 })).toBeNull();
+    expect(sanitizeFigure({ id: "", team: "ct", label: "", x: 0.5, y: 0.5 })).toBeNull();
+    expect(sanitizeFigure({ id: "a".repeat(200), team: "ct", label: "", x: 0.5, y: 0.5 })).toBeNull();
+    expect(sanitizeFigure({ id: "p1", team: "ct", label: "", x: "0.5", y: 0.5 })).toBeNull();
+    expect(sanitizeFigure(null)).toBeNull();
+  });
+});
+
+describe("sanitizeFigures", () => {
+  it("фильтрует мусор и режет по MAX_FIGURES", () => {
+    const ok = { id: "p", team: "t", label: "", x: 0.1, y: 0.1 };
+    expect(sanitizeFigures([ok, "junk", { id: "q", team: "z", x: 0, y: 0 }])).toHaveLength(1);
+    const many = Array.from({ length: MAX_FIGURES + 10 }, (_, i) => ({ ...ok, id: `p${i}` }));
+    expect(sanitizeFigures(many)).toHaveLength(MAX_FIGURES);
   });
 });

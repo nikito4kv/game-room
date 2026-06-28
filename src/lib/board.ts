@@ -18,6 +18,12 @@ export type Stroke = {
   points: Point[];
 };
 
+/** Команда фигурки: CT или T. */
+export type Team = "ct" | "t";
+
+/** Фигурка-игрок на доске. Координаты — нормированные 0..1. */
+export type Figure = { id: string; team: Team; label: string; x: number; y: number };
+
 /**
  * Сообщения, летящие по data-каналу под топиком "board".
  *
@@ -56,6 +62,10 @@ export const MAX_POINTS_PER_STROKE = 10_000;
 export const MAX_STROKES = 5_000;
 /** Максимальная длина id штриха. */
 export const MAX_ID_LEN = 64;
+/** Максимум фигурок-игроков на доске. */
+export const MAX_FIGURES = 50;
+/** Максимальная длина подписи фигурки. */
+export const MAX_LABEL_LEN = 16;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -108,6 +118,39 @@ export function sanitizeClock(v: unknown): number | null {
 /** Возвращает цвет, если он валидный hex, иначе fallback. */
 export function safeColor(v: unknown, fallback: string): string {
   return isHexColor(v) ? v : fallback;
+}
+
+function isTeam(v: unknown): v is Team {
+  return v === "ct" || v === "t";
+}
+
+/** Чистая подпись: убираем управляющие символы/переводы строк, trim, обрезаем по длине. */
+export function safeLabel(v: unknown): string {
+  if (typeof v !== "string") return "";
+  // eslint-disable-next-line no-control-regex -- намеренно вырезаем управляющие символы из недоверенного ввода
+  return v.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, MAX_LABEL_LEN);
+}
+
+/** Приводит произвольный объект к корректной Figure или возвращает null. */
+export function sanitizeFigure(raw: unknown): Figure | null {
+  if (!raw || typeof raw !== "object") return null;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.id !== "string" || !f.id || f.id.length > MAX_ID_LEN) return null;
+  if (!isTeam(f.team)) return null;
+  if (!isFiniteNum(f.x) || !isFiniteNum(f.y)) return null;
+  return { id: f.id, team: f.team, label: safeLabel(f.label), x: clamp01(f.x), y: clamp01(f.y) };
+}
+
+/** Приводит входной массив фигурок к корректным Figure[] (с кэпом MAX_FIGURES). */
+export function sanitizeFigures(raw: unknown): Figure[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Figure[] = [];
+  for (const r of raw) {
+    const f = sanitizeFigure(r);
+    if (f) out.push(f);
+    if (out.length >= MAX_FIGURES) break;
+  }
+  return out;
 }
 
 /**
