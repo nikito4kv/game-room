@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  BUILTIN_MAP_RE,
   clamp01,
   decodeBoardMessage,
   encodeBoardMessage,
@@ -209,5 +210,26 @@ describe("sanitizeArrows", () => {
     expect(sanitizeArrows([ok, "x", { id: "b", style: "no" }])).toHaveLength(1);
     const many = Array.from({ length: MAX_ARROWS + 5 }, (_, i) => ({ ...ok, id: `a${i}` }));
     expect(sanitizeArrows(many)).toHaveLength(MAX_ARROWS);
+  });
+});
+
+describe("sanitizeBgUrl — встроенные карты", () => {
+  it("пропускает корне-относительные пути карт", () => {
+    expect(sanitizeBgUrl("/maps/cs2/mirage.jpg")).toBe("/maps/cs2/mirage.jpg");
+    expect(sanitizeBgUrl("/maps/cs2/de_nuke.webp")).toBe("/maps/cs2/de_nuke.webp");
+  });
+  it("по-прежнему пропускает http(s) и data:image", () => {
+    expect(sanitizeBgUrl("https://x/y.png")).toBe("https://x/y.png");
+    expect(sanitizeBgUrl("data:image/png;base64,AAAA")).toBe("data:image/png;base64,AAAA");
+  });
+  it("блокирует обход каталога и чужие пути", () => {
+    expect(sanitizeBgUrl("/maps/cs2/../../etc/passwd")).toBeNull();
+    expect(sanitizeBgUrl("/etc/passwd")).toBeNull();
+    expect(sanitizeBgUrl("/maps/cs2/mirage.svg")).toBeNull();
+    expect(sanitizeBgUrl("javascript:alert(1)")).toBeNull();
+  });
+  it("BUILTIN_MAP_RE matches только валидные id", () => {
+    expect(BUILTIN_MAP_RE.test("/maps/cs2/mirage.jpg")).toBe(true);
+    expect(BUILTIN_MAP_RE.test("/maps/cs2/mirage.svg")).toBe(false);
   });
 });

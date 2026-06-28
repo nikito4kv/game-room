@@ -251,13 +251,18 @@ export function sanitizeStrokes(raw: unknown): Stroke[] {
 }
 
 /**
- * Разрешаем как фон только http(s)/data:image — чтобы по data-каналу нельзя было
- * подсунуть произвольную строку (защита от CSS-инъекций и javascript:-схем).
- * Возвращает безопасный URL или null.
+ * Белый список встроенных карт: строго `/maps/cs2/<id>.<ext>` без обхода каталога.
+ * Якоря ^$ и отсутствие точки/слэша внутри id не дают подсунуть `..` или чужой путь.
+ */
+export const BUILTIN_MAP_RE = /^\/maps\/cs2\/[a-z0-9_-]+\.(jpg|png|webp)$/i;
+
+/**
+ * Разрешаем как фон: http(s), data:image и встроенные карты (см. BUILTIN_MAP_RE).
+ * Иначе по data-каналу нельзя подсунуть произвольную строку (CSS/JS-инъекции).
  */
 export function sanitizeBgUrl(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const url = raw.trim();
-  if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url)) return url;
+  if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url) || BUILTIN_MAP_RE.test(url)) return url;
   return null;
 }
