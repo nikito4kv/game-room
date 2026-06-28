@@ -12,16 +12,20 @@ import {
   MAX_ID_LEN,
   MAX_POINTS_PER_STROKE,
   MAX_STROKES,
+  MAX_ARROWS,
   MAX_FIGURES,
   quantizeCoord,
   safeColor,
   safeLabel,
+  sanitizeArrow,
+  sanitizeArrows,
   sanitizeBgUrl,
   sanitizeClock,
   sanitizeFigure,
   sanitizeFigures,
   sanitizePoints,
   sanitizeStrokes,
+  type Arrow,
   type ArrowStyle,
   type BoardMessage,
   type Figure,
@@ -42,6 +46,7 @@ import { playSfx } from "@/lib/audio/sfx";
 import BoardRail, { type Tool } from "./BoardRail";
 import MapPicker from "./MapPicker";
 import FigureLayer from "./FigureLayer";
+import ArrowLayer from "./ArrowLayer";
 import { genFigureId, nextFigureNumber } from "@/lib/boardFigures";
 import type { GameMap } from "@/lib/maps";
 
@@ -105,6 +110,15 @@ export default function TacticsBoard({
   useEffect(() => {
     figuresRef.current = figures;
   }, [figures]);
+
+  // Стрелки. Та же схема: ref для onMessage, state для рендера.
+  const [arrows, setArrows] = useState<Arrow[]>([]);
+  const arrowsRef = useRef<Arrow[]>([]);
+  const [selectedArrowId, setSelectedArrowId] = useState<string | null>(null);
+  const arrowSeq = useRef(0);
+  useEffect(() => {
+    arrowsRef.current = arrows;
+  }, [arrows]);
 
   // Инструмент. Цвет/толщина — также в localStorage (восстановим при входе).
   const [tool, setTool] = useState<Tool>("draw");
@@ -215,7 +229,9 @@ export default function TacticsBoard({
       strokesRef.current = [];
       activeRef.current = null;
       setFigures([]);
+      setArrows([]);
       setSelectedFigId(null);
+      setSelectedArrowId(null);
       redraw();
     },
     [redraw],
@@ -295,6 +311,7 @@ export default function TacticsBoard({
           bg: bgRef.current,
           bgVer: bgVerRef.current,
           figures: figuresRef.current,
+          arrows: arrowsRef.current,
         },
         [to],
       );
@@ -416,6 +433,26 @@ export default function TacticsBoard({
           setFigures((prev) => prev.filter((f) => f.id !== msg.id));
           break;
         }
+        case "arrow-add": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) catchUpEpoch(e);
+          const arrow = sanitizeArrow(msg.arrow);
+          if (!arrow) break;
+          setArrows((prev) => {
+            if (prev.some((a) => a.id === arrow.id)) return prev; // идемпотентность
+            if (prev.length >= MAX_ARROWS) return prev;
+            return [...prev, arrow];
+          });
+          break;
+        }
+        case "arrow-del": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (typeof msg.id !== "string") break;
+          setArrows((prev) => prev.filter((a) => a.id !== msg.id));
+          break;
+        }
         case "bg": {
           const ver = sanitizeClock(msg.ver);
           if (ver === null) break;
@@ -437,7 +474,13 @@ export default function TacticsBoard({
         case "sync-req": {
           // Отвечаем снимком только если доске есть что отдать, адресно автору.
           const id = raw.from?.identity;
-          if (id && (strokesRef.current.length > 0 || bgRef.current || figuresRef.current.length > 0))
+          if (
+            id &&
+            (strokesRef.current.length > 0 ||
+              bgRef.current ||
+              figuresRef.current.length > 0 ||
+              arrowsRef.current.length > 0)
+          )
             sendSnapshot(id);
           break;
         }
@@ -450,6 +493,7 @@ export default function TacticsBoard({
               epochRef.current = e;
               strokesRef.current = [];
               setFigures([]);
+              setArrows([]);
               changed = true;
             }
             // Слияние по id: не теряем своё, безопасно при reconnect и частями.
@@ -475,6 +519,17 @@ export default function TacticsBoard({
               const byId = new Map(prev.map((f) => [f.id, f]));
               for (const f of incoming) {
                 if (byId.size < MAX_FIGURES || byId.has(f.id)) byId.set(f.id, f);
+              }
+              return Array.from(byId.values());
+            });
+          }
+          // Стрелки из снапшота — слияние по id.
+          if (msg.arrows && e !== null && e >= epochRef.current) {
+            const incoming = sanitizeArrows(msg.arrows);
+            setArrows((prev) => {
+              const byId = new Map(prev.map((a) => [a.id, a]));
+              for (const a of incoming) {
+                if (byId.size < MAX_ARROWS || byId.has(a.id)) byId.set(a.id, a);
               }
               return Array.from(byId.values());
             });
@@ -642,19 +697,44 @@ export default function TacticsBoard({
     [broadcast],
   );
 
-  // Delete/Backspace удаляет выделенную фигурку (если фокус не в поле ввода).
+  // --- Стрелки: добавление и удаление ---
+  const addArrow = useCallback(
+    (g: { x1: number; y1: number; x2: number; y2: number }) => {
+      const arrow: Arrow = {
+        id: `${identityRef.current}-arr-${arrowSeq.current++}`,
+        color,
+        style: arrowStyle,
+        ...g,
+      };
+      setArrows((prev) => (prev.length >= MAX_ARROWS ? prev : [...prev, arrow]));
+      broadcast({ t: "arrow-add", epoch: epochRef.current, arrow });
+    },
+    [broadcast, color, arrowStyle],
+  );
+
+  const deleteArrow = useCallback(
+    (id: string) => {
+      setArrows((prev) => prev.filter((a) => a.id !== id));
+      setSelectedArrowId((cur) => (cur === id ? null : cur));
+      broadcast({ t: "arrow-del", epoch: epochRef.current, id });
+    },
+    [broadcast],
+  );
+
+  // Delete/Backspace удаляет выделенную фигурку или стрелку (если фокус не в поле ввода).
   useEffect(() => {
-    if (!active || !selectedFigId) return;
+    if (!active || (!selectedFigId && !selectedArrowId)) return;
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Delete" && ev.key !== "Backspace") return;
       const tag = (ev.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       ev.preventDefault();
-      deleteFigure(selectedFigId);
+      if (selectedFigId) deleteFigure(selectedFigId);
+      else if (selectedArrowId) deleteArrow(selectedArrowId);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, selectedFigId, deleteFigure]);
+  }, [active, selectedFigId, selectedArrowId, deleteFigure, deleteArrow]);
 
   // --- Ввод указателем ---
   const pointFromEvent = useCallback((e: React.PointerEvent): Point => {
@@ -722,7 +802,9 @@ export default function TacticsBoard({
     strokesRef.current = [];
     activeRef.current = null;
     setFigures([]);
+    setArrows([]);
     setSelectedFigId(null);
+    setSelectedArrowId(null);
     redraw();
     playSfx("board-clear");
     broadcast({ t: "clear", epoch: epochRef.current });
@@ -875,6 +957,17 @@ export default function TacticsBoard({
             "absolute inset-0 h-full w-full touch-none " +
             (tool === "draw" || tool === "erase" ? "cursor-crosshair" : "pointer-events-none")
           }
+        />
+        <ArrowLayer
+          arrows={arrows}
+          drawing={tool === "arrow"}
+          selecting={tool === "move"}
+          color={color}
+          style={arrowStyle}
+          selectedId={selectedArrowId}
+          onSelect={setSelectedArrowId}
+          onCommit={addArrow}
+          onDelete={deleteArrow}
         />
         <FigureLayer
           figures={figures}
