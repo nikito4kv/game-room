@@ -24,6 +24,13 @@ export type Team = "ct" | "t";
 /** Фигурка-игрок на доске. Координаты — нормированные 0..1. */
 export type Figure = { id: string; team: Team; label: string; x: number; y: number };
 
+/** Единый источник цветов команд (CT/T) — чтобы фигурки и кнопки спавна не
+ *  разъезжались по палитре. base — заливка, border — обводка, fg — текст/номер. */
+export const TEAM_COLORS: Record<Team, { base: string; border: string; fg: string }> = {
+  ct: { base: "#3aa0ff", border: "#bfe0ff", fg: "#04101f" },
+  t: { base: "#f5b70a", border: "#ffe39a", fg: "#1a1205" },
+};
+
 /** Стиль стрелки: сплошная (раш) или пунктир (ротация). */
 export type ArrowStyle = "solid" | "dashed";
 
@@ -147,7 +154,7 @@ function isTeam(v: unknown): v is Team {
 /** Чистая подпись: убираем управляющие символы/переводы строк, trim, обрезаем по длине. */
 export function safeLabel(v: unknown): string {
   if (typeof v !== "string") return "";
-  // eslint-disable-next-line no-control-regex -- намеренно вырезаем управляющие символы из недоверенного ввода
+  // Намеренно вырезаем управляющие символы (0x00–0x1F, 0x7F) из недоверенного ввода.
   return v.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, MAX_LABEL_LEN);
 }
 
@@ -212,6 +219,26 @@ export function sanitizeArrows(raw: unknown): Arrow[] {
  */
 export function quantizeCoord(n: number): number {
   return Math.round(n * 1e4) / 1e4;
+}
+
+/**
+ * Переводит позицию указателя в нормированную точку 0..1 относительно прямоугольника
+ * слоя (рамки доски): зажимает в 0..1 и квантует. Единая точка нормализации для
+ * штрихов, фигурок и стрелок — чтобы их системы координат не разъезжались, и чтобы
+ * координаты фигурок/стрелок тоже квантовались (компактный снимок).
+ */
+export function normToRect(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+): Point {
+  // Вырожденный прямоугольник (скрытый/неизмеренный слой) дал бы деление на ноль и
+  // NaN-координаты в синхронизируемом состоянии — отдаём 0,0 вместо мусора.
+  if (rect.width <= 0 || rect.height <= 0) return [0, 0];
+  return [
+    quantizeCoord(clamp01((clientX - rect.left) / rect.width)),
+    quantizeCoord(clamp01((clientY - rect.top) / rect.height)),
+  ];
 }
 
 /** Точка [x,y] с числами 0..1. Возвращает null, если форма не та. */

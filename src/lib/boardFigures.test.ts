@@ -18,6 +18,11 @@ describe("nextFigureNumber", () => {
     const five = ["1", "2", "3", "4", "5"].map((l) => fig("t", l));
     expect(nextFigureNumber(five, "t")).toBe(6);
   });
+  it("не считает недесятичные подписи (0x5, 1e2, дробные) за номера", () => {
+    // ни одна из этих подписей не рисуется как номер (FigureLayer тестит /^\d+$/),
+    // поэтому они не должны занимать слоты 5/100/… — следующий номер всё ещё 1.
+    expect(nextFigureNumber([fig("ct", "0x5"), fig("ct", "1e2"), fig("ct", "1.5")], "ct")).toBe(1);
+  });
 });
 
 describe("genFigureId", () => {

@@ -12,6 +12,7 @@ import {
   MAX_LABEL_LEN,
   MAX_POINTS_PER_STROKE,
   MAX_STROKES,
+  normToRect,
   quantizeCoord,
   safeColor,
   safeLabel,
@@ -242,5 +243,25 @@ describe("кодирование новых сообщений доски", () =
   it("arrow-add сериализуется и разбирается без потерь", () => {
     const msg = { t: "arrow-add", epoch: 1, arrow: { id: "a1", color: "#fff", style: "dashed", x1: 0, y1: 0, x2: 1, y2: 1 } } as const;
     expect(decodeBoardMessage(encodeBoardMessage(msg))).toEqual(msg);
+  });
+});
+
+describe("normToRect", () => {
+  const rect = { left: 100, top: 50, width: 200, height: 400 };
+  it("нормирует позицию указателя относительно рамки", () => {
+    expect(normToRect(200, 250, rect)).toEqual([0.5, 0.5]);
+    expect(normToRect(100, 50, rect)).toEqual([0, 0]);
+    expect(normToRect(300, 450, rect)).toEqual([1, 1]);
+  });
+  it("зажимает выход за рамку в 0..1", () => {
+    expect(normToRect(0, 0, rect)).toEqual([0, 0]);
+    expect(normToRect(9999, 9999, rect)).toEqual([1, 1]);
+  });
+  it("квантует координату до 4 знаков (компактный снимок)", () => {
+    const [x] = normToRect(133, 50, rect); // (133-100)/200 = 0.165
+    expect(x).toBe(0.165);
+  });
+  it("вырожденный rect (скрытый слой) даёт 0,0, а не NaN", () => {
+    expect(normToRect(10, 10, { left: 0, top: 0, width: 0, height: 0 })).toEqual([0, 0]);
   });
 });

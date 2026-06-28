@@ -18,3 +18,13 @@ export const CS2_MAPS: GameMap[] = [
   { id: "vertigo", name: "Vertigo", src: "/maps/cs2/vertigo.png", aspect: 1 },
   { id: "train", name: "Train", src: "/maps/cs2/train.png", aspect: 1 },
 ];
+
+/**
+ * Пропорции встроенной карты по её src, иначе null. Позволяет задать рамке
+ * правильное соотношение сразу (без мелькания DEFAULT_ASPECT до загрузки img) —
+ * и у того, кто выбрал карту, и у тех, кому она приехала по data-каналу.
+ */
+export function mapAspect(src: string | null): number | null {
+  if (!src) return null;
+  return CS2_MAPS.find((m) => m.src === src)?.aspect ?? null;
+}

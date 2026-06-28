@@ -14,7 +14,7 @@ import {
   MAX_STROKES,
   MAX_ARROWS,
   MAX_FIGURES,
-  quantizeCoord,
+  normToRect,
   safeColor,
   safeLabel,
   sanitizeArrow,
@@ -48,7 +48,7 @@ import MapPicker from "./MapPicker";
 import FigureLayer from "./FigureLayer";
 import ArrowLayer from "./ArrowLayer";
 import { genFigureId, nextFigureNumber } from "@/lib/boardFigures";
-import type { GameMap } from "@/lib/maps";
+import { mapAspect, type GameMap } from "@/lib/maps";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
 // а в штрихе храним долю (px / NOMINAL_WIDTH). При рисовании доля умножается на
@@ -104,6 +104,11 @@ export default function TacticsBoard({
   const figuresRef = useRef<Figure[]>([]);
   const [selectedFigId, setSelectedFigId] = useState<string | null>(null);
   const figSeq = useRef(0);
+  // Уникальный токен на каждый монтаж компонента: входит в id фигурок/стрелок,
+  // чтобы после перезагрузки/ремаунта счётчики с нуля не дали id, который у пиров
+  // уже занят (иначе arrow-add дедупнулся бы, а fig-add перезаписал чужую фигурку).
+  const mountTag = useRef<string>("");
+  if (!mountTag.current) mountTag.current = Math.random().toString(36).slice(2, 8);
   // Буфер позиций для батч-отправки fig-move на кадре (драг не флудит канал).
   const figMovePending = useRef<Map<string, { x: number; y: number }>>(new Map());
   const figRafRef = useRef<number | null>(null);
@@ -288,11 +293,13 @@ export default function TacticsBoard({
     [],
   );
 
-  // Меняем фон: сбрасываем известные пропорции (узнаем заново из onLoad картинки).
+  // Меняем фон. Для встроенной карты пропорции известны сразу (mapAspect) — рамка
+  // встаёт квадратной без мелькания DEFAULT_ASPECT; для произвольного URL — null,
+  // и пропорции уточнит <img onLoad>. Работает и локально, и у тех, кому фон приехал.
   const applyBg = useCallback((url: string | null) => {
     bgRef.current = url;
     setBg(url);
-    setBgAspect(null);
+    setBgAspect(mapAspect(url));
   }, []);
 
   // Отдаём снимок доски АДРЕСНО автору sync-req. Один пакет data-канала ограничен
@@ -423,12 +430,16 @@ export default function TacticsBoard({
           if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) break;
           const x = clamp01(msg.x);
           const y = clamp01(msg.y);
+          // Если фигурки с таким id ещё нет — игнорируем (создать из move нельзя:
+          // нет команды/подписи). На reliable-ordered канале fig-add всегда раньше
+          // fig-move того же отправителя; редкий рассинхрон лечит снапшот при reconnect.
           setFigures((prev) => prev.map((f) => (f.id === msg.id ? { ...f, x, y } : f)));
           break;
         }
         case "fig-del": {
           const e = sanitizeClock(msg.epoch);
           if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) catchUpEpoch(e); // пропустили «Очистить» — догоняем
           if (typeof msg.id !== "string") break;
           setFigures((prev) => prev.filter((f) => f.id !== msg.id));
           break;
@@ -449,6 +460,7 @@ export default function TacticsBoard({
         case "arrow-del": {
           const e = sanitizeClock(msg.epoch);
           if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) catchUpEpoch(e); // пропустили «Очистить» — догоняем
           if (typeof msg.id !== "string") break;
           setArrows((prev) => prev.filter((a) => a.id !== msg.id));
           break;
@@ -490,10 +502,7 @@ export default function TacticsBoard({
           // Штрихи учитываем, только если снимок не старее нашей последней очистки.
           if (e !== null && e >= epochRef.current) {
             if (e > epochRef.current) {
-              epochRef.current = e;
-              strokesRef.current = [];
-              setFigures([]);
-              setArrows([]);
+              catchUpEpoch(e); // единая очистка всех слоёв + сброс выделения
               changed = true;
             }
             // Слияние по id: не теряем своё, безопасно при reconnect и частями.
@@ -641,7 +650,7 @@ export default function TacticsBoard({
       // актуальному prev — иначе два быстрых клика подряд (ref ещё не обновлён
       // эффектом) дали бы одинаковый номер. fig-add идемпотентен по id, поэтому
       // повторный вызов апдейтера в StrictMode не плодит дублей у получателей.
-      const id = genFigureId(identityRef.current, figSeq.current++);
+      const id = genFigureId(`${identityRef.current}.${mountTag.current}`, figSeq.current++);
       setFigures((prev) => {
         if (prev.length >= MAX_FIGURES) return prev;
         const fig: Figure = { id, team, label: String(nextFigureNumber(prev, team)), x: 0.5, y: 0.5 };
@@ -664,18 +673,22 @@ export default function TacticsBoard({
     [broadcast],
   );
 
-  // Во время драга: локально — сразу (плавно), по сети — батчем на следующий кадр.
+  // Во время драга и локальный ре-рендер, и отправка по сети — батчем на кадр:
+  // pointermove может срабатывать чаще кадра, а так мы делаем максимум один
+  // setFigures + один пакет fig-move в кадр на каждую двигающуюся фигурку.
   const flushFigMoves = useCallback(() => {
     figRafRef.current = null;
-    for (const [id, p] of figMovePending.current) {
+    const pending = figMovePending.current;
+    if (pending.size === 0) return;
+    setFigures((prev) => prev.map((f) => (pending.has(f.id) ? { ...f, ...pending.get(f.id)! } : f)));
+    for (const [id, p] of pending) {
       broadcast({ t: "fig-move", epoch: epochRef.current, id, x: p.x, y: p.y });
     }
-    figMovePending.current.clear();
+    pending.clear();
   }, [broadcast]);
 
   const moveFigureLive = useCallback(
     (id: string, x: number, y: number) => {
-      setFigures((prev) => prev.map((f) => (f.id === id ? { ...f, x, y } : f)));
       figMovePending.current.set(id, { x, y });
       if (figRafRef.current == null) figRafRef.current = requestAnimationFrame(flushFigMoves);
     },
@@ -684,6 +697,7 @@ export default function TacticsBoard({
 
   const moveFigureCommit = useCallback(
     (id: string, x: number, y: number) => {
+      figMovePending.current.delete(id); // финальную позицию шлём сами — не дублируем в кадре
       setFigures((prev) => prev.map((f) => (f.id === id ? { ...f, x, y } : f)));
       broadcast({ t: "fig-move", epoch: epochRef.current, id, x, y }); // гарантированно финальная позиция
     },
@@ -703,7 +717,7 @@ export default function TacticsBoard({
   const addArrow = useCallback(
     (g: { x1: number; y1: number; x2: number; y2: number }) => {
       const arrow: Arrow = {
-        id: `${identityRef.current}-arr-${arrowSeq.current++}`,
+        id: `${identityRef.current}.${mountTag.current}-arr-${arrowSeq.current++}`,
         color,
         style: arrowStyle,
         ...g,
@@ -723,6 +737,17 @@ export default function TacticsBoard({
     [broadcast],
   );
 
+  // Выделение фигурки и стрелки взаимоисключающее: выбор одного снимает другой,
+  // иначе по Delete удалялась бы только фигурка, а выделенная стрелка «залипала».
+  const selectFigure = useCallback((id: string | null) => {
+    setSelectedFigId(id);
+    if (id !== null) setSelectedArrowId(null);
+  }, []);
+  const selectArrow = useCallback((id: string | null) => {
+    setSelectedArrowId(id);
+    if (id !== null) setSelectedFigId(null);
+  }, []);
+
   // Delete/Backspace удаляет выделенную фигурку или стрелку (если фокус не в поле ввода).
   useEffect(() => {
     if (!active || (!selectedFigId && !selectedArrowId)) return;
@@ -740,12 +765,7 @@ export default function TacticsBoard({
 
   // --- Ввод указателем ---
   const pointFromEvent = useCallback((e: React.PointerEvent): Point => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    return [
-      quantizeCoord(clamp01((e.clientX - rect.left) / rect.width)),
-      quantizeCoord(clamp01((e.clientY - rect.top) / rect.height)),
-    ];
+    return normToRect(e.clientX, e.clientY, canvasRef.current!.getBoundingClientRect());
   }, []);
 
   function handlePointerDown(e: React.PointerEvent) {
@@ -923,10 +943,7 @@ export default function TacticsBoard({
         {amHost && (
           <MapPicker
             currentSrc={bg}
-            onPick={(m: GameMap) => {
-              setBgAspect(m.aspect);
-              setBackground(m.src);
-            }}
+            onPick={(m: GameMap) => setBackground(m.src)}
           />
         )}
         {/* Фон — отдельный <img>, а не CSS background: так нельзя подсунуть
@@ -967,7 +984,7 @@ export default function TacticsBoard({
           color={color}
           style={arrowStyle}
           selectedId={selectedArrowId}
-          onSelect={setSelectedArrowId}
+          onSelect={selectArrow}
           onCommit={addArrow}
           onDelete={deleteArrow}
         />
@@ -975,7 +992,7 @@ export default function TacticsBoard({
           figures={figures}
           draggable={tool === "move"}
           selectedId={selectedFigId}
-          onSelect={setSelectedFigId}
+          onSelect={selectFigure}
           onMove={moveFigureLive}
           onMoveEnd={moveFigureCommit}
           onEditLabel={editFigureLabel}

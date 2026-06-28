@@ -1,12 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import type { Figure } from "@/lib/board";
-
-export const TEAM_STYLE: Record<"ct" | "t", { bg: string; bd: string; fg: string }> = {
-  ct: { bg: "#3aa0ff", bd: "#bfe0ff", fg: "#04101f" },
-  t: { bg: "#f5b70a", bd: "#ffe39a", fg: "#1a1205" },
-};
+import { normToRect, TEAM_COLORS, type Figure } from "@/lib/board";
 
 /**
  * DOM-слой фигурок поверх доски. Указатель ловит только когда draggable (режим
@@ -28,11 +23,12 @@ export default function FigureLayer({
   const layerRef = useRef<HTMLDivElement>(null);
   const dragId = useRef<string | null>(null);
   const last = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Двигали ли фигурку в этом жесте. Без этого простой клик-выделение (pointerdown
+  // без move) на pointerup закоммитил бы last={0,0} и телепортировал фигурку в угол.
+  const moved = useRef(false);
 
   function norm(e: React.PointerEvent) {
-    const r = layerRef.current!.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-    const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    const [x, y] = normToRect(e.clientX, e.clientY, layerRef.current!.getBoundingClientRect());
     return { x, y };
   }
 
@@ -41,17 +37,19 @@ export default function FigureLayer({
     e.stopPropagation();
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragId.current = id;
+    moved.current = false;
     onSelect(id);
   }
   function move(e: React.PointerEvent) {
     if (!dragId.current) return;
     const p = norm(e);
     last.current = p;
+    moved.current = true;
     onMove(dragId.current, p.x, p.y);
   }
   function up() {
     if (!dragId.current) return;
-    onMoveEnd(dragId.current, last.current.x, last.current.y);
+    if (moved.current) onMoveEnd(dragId.current, last.current.x, last.current.y);
     dragId.current = null;
   }
 
@@ -65,7 +63,7 @@ export default function FigureLayer({
       onClick={(e) => { if (e.target === layerRef.current) onSelect(null); }}
     >
       {figures.map((f) => {
-        const s = TEAM_STYLE[f.team];
+        const s = TEAM_COLORS[f.team];
         const selected = f.id === selectedId;
         const isNumber = /^\d+$/.test(f.label);
         return (
@@ -80,7 +78,7 @@ export default function FigureLayer({
             className="absolute flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[13px] font-bold shadow-[0_2px_6px_rgba(0,0,0,.55)]"
             style={{
               left: `${f.x * 100}%`, top: `${f.y * 100}%`,
-              background: s.bg, color: s.fg, border: `2px solid ${s.bd}`,
+              background: s.base, color: s.fg, border: `2px solid ${s.border}`,
               boxShadow: selected ? "0 0 0 2px var(--text)" : undefined,
               cursor: draggable ? "grab" : "default",
               touchAction: "none",

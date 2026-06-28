@@ -2,7 +2,7 @@
 
 import Icon, { type IconName } from "@/components/Icon";
 import ElasticSlider from "@/components/ElasticSlider";
-import type { ArrowStyle } from "@/lib/board";
+import { TEAM_COLORS, type ArrowStyle } from "@/lib/board";
 
 export type Tool = "move" | "draw" | "erase" | "arrow";
 
@@ -59,7 +59,7 @@ export default function BoardRail({
           aria-label="Добавить игрока CT"
           title="Добавить CT"
           className="flex h-11 w-11 items-center justify-center rounded-lg text-[13px] font-bold"
-          style={{ color: "#3aa0ff", border: "1.5px solid #3aa0ff80", background: "#3aa0ff1f" }}
+          style={{ color: TEAM_COLORS.ct.base, border: `1.5px solid ${TEAM_COLORS.ct.base}80`, background: `${TEAM_COLORS.ct.base}1f` }}
         >
           CT
         </button>
@@ -68,7 +68,7 @@ export default function BoardRail({
           aria-label="Добавить игрока T"
           title="Добавить T"
           className="flex h-11 w-11 items-center justify-center rounded-lg text-[13px] font-bold"
-          style={{ color: "#f5b70a", border: "1.5px solid #f5b70a80", background: "#f5b70a1f" }}
+          style={{ color: TEAM_COLORS.t.base, border: `1.5px solid ${TEAM_COLORS.t.base}80`, background: `${TEAM_COLORS.t.base}1f` }}
         >
           T
         </button>

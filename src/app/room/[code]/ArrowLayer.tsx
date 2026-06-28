@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { Arrow, ArrowStyle } from "@/lib/board";
+import { normToRect, type Arrow, type ArrowStyle } from "@/lib/board";
 
 /**
  * SVG-слой стрелок. В режиме «Стрелка» рисует резиновую прямую (превью локальное),
@@ -28,13 +28,12 @@ export default function ArrowLayer({
   const [draft, setDraft] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
   function norm(e: React.PointerEvent) {
-    const r = svgRef.current!.getBoundingClientRect();
-    return {
-      x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
-    };
+    const [x, y] = normToRect(e.clientX, e.clientY, svgRef.current!.getBoundingClientRect());
+    return { x, y };
   }
   function down(e: React.PointerEvent) {
+    // Клик мимо стрелки в режиме выделения — снять выделение.
+    if (selecting && e.target === svgRef.current) onSelect(null);
     if (!drawing) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const p = norm(e);

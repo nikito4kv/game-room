@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CS2_MAPS } from "@/lib/maps";
+import { CS2_MAPS, mapAspect } from "@/lib/maps";
 import { BUILTIN_MAP_RE, sanitizeBgUrl } from "@/lib/board";
 
 describe("CS2_MAPS", () => {
@@ -14,5 +14,15 @@ describe("CS2_MAPS", () => {
       expect(m.aspect).toBeGreaterThan(0);
       expect(m.name.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("mapAspect", () => {
+  it("возвращает aspect встроенной карты по src", () => {
+    expect(mapAspect("/maps/cs2/mirage.png")).toBe(1);
+  });
+  it("null для неизвестного src и для null", () => {
+    expect(mapAspect("https://example.com/x.png")).toBeNull();
+    expect(mapAspect(null)).toBeNull();
   });
 });
