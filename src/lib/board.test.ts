@@ -5,23 +5,32 @@ import {
   decodeBoardMessage,
   encodeBoardMessage,
   isHexColor,
+  isObjKind,
+  isTechnique,
   MAX_ARROWS,
   MAX_CLOCK,
   MAX_FIGURES,
   MAX_ID_LEN,
   MAX_LABEL_LEN,
+  MAX_OBJECTS,
+  MAX_NOTE_LEN,
+  MAX_OBJ_RADIUS,
   MAX_POINTS_PER_STROKE,
   MAX_STROKES,
+  MIN_OBJ_RADIUS,
   normToRect,
   quantizeCoord,
   safeColor,
   safeLabel,
+  safeNote,
   sanitizeArrow,
   sanitizeArrows,
   sanitizeBgUrl,
   sanitizeClock,
   sanitizeFigure,
   sanitizeFigures,
+  sanitizeGameObject,
+  sanitizeGameObjects,
   sanitizePoints,
   sanitizeStroke,
   sanitizeStrokes,
@@ -263,5 +272,80 @@ describe("normToRect", () => {
   });
   it("вырожденный rect (скрытый слой) даёт 0,0, а не NaN", () => {
     expect(normToRect(10, 10, { left: 0, top: 0, width: 0, height: 0 })).toEqual([0, 0]);
+  });
+});
+
+describe("isObjKind / isTechnique", () => {
+  it("принимает только известные значения", () => {
+    expect(isObjKind("smoke")).toBe(true);
+    expect(isObjKind("he")).toBe(true);
+    expect(isObjKind("nuke")).toBe(false);
+    expect(isObjKind(7)).toBe(false);
+    expect(isTechnique("jump")).toBe(true);
+    expect(isTechnique("fly")).toBe(false);
+  });
+});
+
+describe("safeNote", () => {
+  it("чистит управляющие символы, тримит и режет по длине", () => {
+    expect(safeNote("  1.6с\n ")).toBe("1.6с");
+    expect(safeNote("a".repeat(40)).length).toBe(MAX_NOTE_LEN);
+    expect(safeNote(123)).toBe("");
+  });
+});
+
+describe("sanitizeGameObject", () => {
+  const base = { id: "p1.ab-obj-0", kind: "smoke", x: 0.5, y: 0.5 };
+
+  it("принимает корректный объект и зажимает координаты", () => {
+    const o = sanitizeGameObject({ ...base, x: 2, y: -1 });
+    expect(o).toEqual({ id: "p1.ab-obj-0", kind: "smoke", x: 1, y: 0 });
+  });
+  it("отвергает без id / с плохим kind / без координат", () => {
+    expect(sanitizeGameObject({ ...base, id: "" })).toBeNull();
+    expect(sanitizeGameObject({ ...base, kind: "bomb" })).toBeNull();
+    expect(sanitizeGameObject({ ...base, x: "nope" })).toBeNull();
+    expect(sanitizeGameObject(null)).toBeNull();
+  });
+  it("зажимает radius в пределах и игнорирует нечисловой", () => {
+    expect(sanitizeGameObject({ ...base, radius: 99 })!.radius).toBe(MAX_OBJ_RADIUS);
+    expect(sanitizeGameObject({ ...base, radius: 0 })!.radius).toBe(MIN_OBJ_RADIUS);
+    expect(sanitizeGameObject({ ...base, radius: "x" })!.radius).toBeUndefined();
+  });
+  it("санитизирует from, technique и note; мусор отбрасывает", () => {
+    const o = sanitizeGameObject({
+      ...base,
+      from: { x: 5, y: 0.2 },
+      technique: "runjump",
+      note: "  после фейка ",
+    })!;
+    expect(o.from).toEqual({ x: 1, y: 0.2 });
+    expect(o.technique).toBe("runjump");
+    expect(o.note).toBe("после фейка");
+    const bad = sanitizeGameObject({ ...base, from: { x: "a" }, technique: "fly", note: "" })!;
+    expect(bad.from).toBeUndefined();
+    expect(bad.technique).toBeUndefined();
+    expect(bad.note).toBeUndefined();
+  });
+});
+
+describe("sanitizeGameObjects", () => {
+  it("фильтрует мусор и режет по MAX_OBJECTS", () => {
+    const many = Array.from({ length: MAX_OBJECTS + 10 }, (_, i) => ({
+      id: `o${i}`, kind: "flash", x: 0.1, y: 0.1,
+    }));
+    expect(sanitizeGameObjects([...many, "junk", null]).length).toBe(MAX_OBJECTS);
+    expect(sanitizeGameObjects("nope")).toEqual([]);
+  });
+});
+
+describe("gobj-add roundtrip", () => {
+  it("кодируется и декодируется без потерь", () => {
+    const msg = {
+      t: "gobj-add" as const,
+      epoch: 3,
+      obj: { id: "o1", kind: "molotov" as const, x: 0.2, y: 0.3, radius: 0.06 },
+    };
+    expect(decodeBoardMessage(encodeBoardMessage(msg))).toEqual(msg);
   });
 });

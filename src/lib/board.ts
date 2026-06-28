@@ -37,6 +37,31 @@ export type ArrowStyle = "solid" | "dashed";
 /** Прямая стрелка между двумя точками. Координаты — нормированные 0..1. */
 export type Arrow = { id: string; color: string; style: ArrowStyle; x1: number; y1: number; x2: number; y2: number };
 
+/** Тип игрового объекта CS2 (граната). */
+export type ObjKind = "smoke" | "flash" | "molotov" | "he" | "decoy";
+
+/** Класс рендера: зона эффекта (круг) или точечная иконка. */
+export type ObjClass = "zone" | "icon";
+
+/** Техника броска для линии «откуда кидать». */
+export type Technique = "stand" | "jump" | "runjump" | "move";
+
+/**
+ * Игровой объект на доске. Координаты — нормированные 0..1.
+ * radius — только для zone-типов (доля ширины доски). from — точка броска
+ * (при наличии рисуется линия). technique/note — подпись тайминга.
+ */
+export type GameObject = {
+  id: string;
+  kind: ObjKind;
+  x: number;
+  y: number;
+  radius?: number;
+  from?: { x: number; y: number };
+  technique?: Technique;
+  note?: string;
+};
+
 /**
  * Сообщения, летящие по data-каналу под топиком "board".
  *
@@ -70,7 +95,14 @@ export type BoardMessage =
   // --- Стрелки ---
   | { t: "arrow-add"; epoch: number; arrow: Arrow }
   | { t: "arrow-del"; epoch: number; id: string }
-  | { t: "sync-state"; epoch: number; strokes: Stroke[]; bg: string | null; bgVer: number; figures?: Figure[]; arrows?: Arrow[] };
+  // --- Игровые объекты (гранаты) ---
+  // Добавить ИЛИ обновить объект (upsert по id: тип/техника/заметка/геометрия).
+  | { t: "gobj-add"; epoch: number; obj: GameObject }
+  // Патч геометрии во время драга (батчем на RAF). Применяются присутствующие поля.
+  | { t: "gobj-move"; epoch: number; id: string; x?: number; y?: number; fromX?: number; fromY?: number; radius?: number }
+  // Удалить один объект.
+  | { t: "gobj-del"; epoch: number; id: string }
+  | { t: "sync-state"; epoch: number; strokes: Stroke[]; bg: string | null; bgVer: number; figures?: Figure[]; arrows?: Arrow[]; objects?: GameObject[] };
 
 /** Топик data-канала, под которым живут все сообщения доски. */
 export const BOARD_TOPIC = "board";
@@ -93,6 +125,13 @@ export const MAX_FIGURES = 50;
 export const MAX_LABEL_LEN = 16;
 /** Максимум стрелок на доске. */
 export const MAX_ARROWS = 100;
+/** Максимум игровых объектов на доске. */
+export const MAX_OBJECTS = 40;
+/** Максимальная длина заметки тайминга. */
+export const MAX_NOTE_LEN = 24;
+/** Границы радиуса зоны эффекта (доля ширины доски). */
+export const MIN_OBJ_RADIUS = 0.02;
+export const MAX_OBJ_RADIUS = 0.25;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -208,6 +247,61 @@ export function sanitizeArrows(raw: unknown): Arrow[] {
     const a = sanitizeArrow(r);
     if (a) out.push(a);
     if (out.length >= MAX_ARROWS) break;
+  }
+  return out;
+}
+
+const OBJ_KINDS: ObjKind[] = ["smoke", "flash", "molotov", "he", "decoy"];
+export function isObjKind(v: unknown): v is ObjKind {
+  return typeof v === "string" && (OBJ_KINDS as string[]).includes(v);
+}
+
+const TECHNIQUES: Technique[] = ["stand", "jump", "runjump", "move"];
+export function isTechnique(v: unknown): v is Technique {
+  return typeof v === "string" && (TECHNIQUES as string[]).includes(v);
+}
+
+/** Чистая заметка тайминга: режем управляющие символы, trim, обрезаем по длине. */
+export function safeNote(v: unknown): string {
+  if (typeof v !== "string") return "";
+  // Намеренно вырезаем управляющие символы (0x00–0x1F, 0x7F) из недоверенного ввода.
+  return v.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, MAX_NOTE_LEN);
+}
+
+function sanitizeFromPoint(raw: unknown): { x: number; y: number } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  if (!isFiniteNum(f.x) || !isFiniteNum(f.y)) return undefined;
+  return { x: clamp01(f.x), y: clamp01(f.y) };
+}
+
+/** Приводит произвольный объект к корректному GameObject или возвращает null. */
+export function sanitizeGameObject(raw: unknown): GameObject | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.id !== "string" || !o.id || o.id.length > MAX_ID_LEN) return null;
+  if (!isObjKind(o.kind)) return null;
+  if (!isFiniteNum(o.x) || !isFiniteNum(o.y)) return null;
+  const obj: GameObject = { id: o.id, kind: o.kind, x: clamp01(o.x), y: clamp01(o.y) };
+  if (isFiniteNum(o.radius)) {
+    obj.radius = Math.min(MAX_OBJ_RADIUS, Math.max(MIN_OBJ_RADIUS, o.radius));
+  }
+  const from = sanitizeFromPoint(o.from);
+  if (from) obj.from = from;
+  if (isTechnique(o.technique)) obj.technique = o.technique;
+  const note = safeNote(o.note);
+  if (note) obj.note = note;
+  return obj;
+}
+
+/** Приводит входной массив объектов к корректным GameObject[] (с кэпом MAX_OBJECTS). */
+export function sanitizeGameObjects(raw: unknown): GameObject[] {
+  if (!Array.isArray(raw)) return [];
+  const out: GameObject[] = [];
+  for (const r of raw) {
+    const o = sanitizeGameObject(r);
+    if (o) out.push(o);
+    if (out.length >= MAX_OBJECTS) break;
   }
   return out;
 }
