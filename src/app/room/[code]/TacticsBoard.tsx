@@ -35,6 +35,8 @@ import Banner from "@/components/Banner";
 import Icon from "@/components/Icon";
 import { playSfx } from "@/lib/audio/sfx";
 import BoardRail, { type Tool } from "./BoardRail";
+import MapPicker from "./MapPicker";
+import type { GameMap } from "@/lib/maps";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
 // а в штрихе храним долю (px / NOMINAL_WIDTH). При рисовании доля умножается на
@@ -672,6 +674,15 @@ export default function TacticsBoard({
           onAddFigure={() => {}}
           onClear={clearBoard}
         />
+        {amHost && (
+          <MapPicker
+            currentSrc={bg}
+            onPick={(m: GameMap) => {
+              setBgAspect(m.aspect);
+              setBackground(m.src);
+            }}
+          />
+        )}
         {/* Фон — отдельный <img>, а не CSS background: так нельзя подсунуть
             произвольную CSS-строку, и рамка точно совпадает с картинкой.
             next/image тут не подходит — src произвольный (любой URL карты,
