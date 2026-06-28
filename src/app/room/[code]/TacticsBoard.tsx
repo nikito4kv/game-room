@@ -637,15 +637,17 @@ export default function TacticsBoard({
   // --- Фигурки: добавление, правка подписи, перемещение, удаление ---
   const addFigure = useCallback(
     (team: "ct" | "t") => {
-      const fig: Figure = {
-        id: genFigureId(identityRef.current, figSeq.current++),
-        team,
-        label: String(nextFigureNumber(figuresRef.current, team)),
-        x: 0.5,
-        y: 0.5, // в центр доски
-      };
-      setFigures((prev) => (prev.length >= MAX_FIGURES ? prev : [...prev, fig]));
-      broadcast({ t: "fig-add", epoch: epochRef.current, fig });
+      // id берём вне апдейтера (счётчик растёт один раз). Номер считаем ВНУТРИ по
+      // актуальному prev — иначе два быстрых клика подряд (ref ещё не обновлён
+      // эффектом) дали бы одинаковый номер. fig-add идемпотентен по id, поэтому
+      // повторный вызов апдейтера в StrictMode не плодит дублей у получателей.
+      const id = genFigureId(identityRef.current, figSeq.current++);
+      setFigures((prev) => {
+        if (prev.length >= MAX_FIGURES) return prev;
+        const fig: Figure = { id, team, label: String(nextFigureNumber(prev, team)), x: 0.5, y: 0.5 };
+        broadcast({ t: "fig-add", epoch: epochRef.current, fig });
+        return [...prev, fig];
+      });
     },
     [broadcast],
   );
