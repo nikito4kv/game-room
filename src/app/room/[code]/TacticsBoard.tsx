@@ -14,24 +14,31 @@ import {
   MAX_STROKES,
   MAX_ARROWS,
   MAX_FIGURES,
+  MAX_OBJECTS,
   normToRect,
   safeColor,
   safeLabel,
+  safeNote,
   sanitizeArrow,
   sanitizeArrows,
   sanitizeBgUrl,
   sanitizeClock,
   sanitizeFigure,
   sanitizeFigures,
+  sanitizeGameObject,
+  sanitizeGameObjects,
   sanitizePoints,
   sanitizeStrokes,
   type Arrow,
   type ArrowStyle,
   type BoardMessage,
   type Figure,
+  type GameObject,
+  type ObjKind,
   type Point,
   type Stroke,
   type StrokeMode,
+  type Technique,
 } from "@/lib/board";
 import {
   getBoardColor,
@@ -48,6 +55,8 @@ import MapPicker from "./MapPicker";
 import FigureLayer from "./FigureLayer";
 import ArrowLayer from "./ArrowLayer";
 import { genFigureId, nextFigureNumber } from "@/lib/boardFigures";
+import { applyGeom, genObjectId, objDef, type ObjGeom } from "@/lib/boardObjects";
+import GObjectLayer from "./GObjectLayer";
 import { mapAspect, type GameMap } from "@/lib/maps";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
@@ -124,6 +133,18 @@ export default function TacticsBoard({
   useEffect(() => {
     arrowsRef.current = arrows;
   }, [arrows]);
+
+  // Игровые объекты (гранаты). Та же схема: ref для onMessage, state для рендера.
+  const [objects, setObjects] = useState<GameObject[]>([]);
+  const objectsRef = useRef<GameObject[]>([]);
+  const [selectedObjId, setSelectedObjId] = useState<string | null>(null);
+  const [objKind, setObjKind] = useState<ObjKind>("smoke");
+  const objSeq = useRef(0);
+  const objMovePending = useRef<Map<string, ObjGeom>>(new Map());
+  const objRafRef = useRef<number | null>(null);
+  useEffect(() => {
+    objectsRef.current = objects;
+  }, [objects]);
 
   // Инструмент. Цвет/толщина — также в localStorage (восстановим при входе).
   const [tool, setTool] = useState<Tool>("draw");
@@ -235,8 +256,10 @@ export default function TacticsBoard({
       activeRef.current = null;
       setFigures([]);
       setArrows([]);
+      setObjects([]);
       setSelectedFigId(null);
       setSelectedArrowId(null);
+      setSelectedObjId(null);
       redraw();
     },
     [redraw],
@@ -319,6 +342,7 @@ export default function TacticsBoard({
           bgVer: bgVerRef.current,
           figures: figuresRef.current,
           arrows: arrowsRef.current,
+          objects: objectsRef.current,
         },
         [to],
       );
@@ -465,6 +489,52 @@ export default function TacticsBoard({
           setArrows((prev) => prev.filter((a) => a.id !== msg.id));
           break;
         }
+        case "gobj-add": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) catchUpEpoch(e);
+          const obj = sanitizeGameObject(msg.obj);
+          if (!obj) break;
+          // upsert по id: и создание, и правка типа/техники/заметки/геометрии.
+          setObjects((prev) => {
+            const i = prev.findIndex((o) => o.id === obj.id);
+            if (i !== -1) {
+              const n = prev.slice();
+              n[i] = obj;
+              return n;
+            }
+            if (prev.length >= MAX_OBJECTS) return prev; // потолок
+            return [...prev, obj];
+          });
+          break;
+        }
+        case "gobj-move": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) {
+            catchUpEpoch(e);
+            break;
+          }
+          if (typeof msg.id !== "string") break;
+          // Патч геометрии: применяем только присутствующие конечные поля. Если
+          // объекта с таким id ещё нет — игнор (создать из move нельзя: нет kind).
+          const g: ObjGeom = {};
+          if (Number.isFinite(msg.x)) g.x = msg.x as number;
+          if (Number.isFinite(msg.y)) g.y = msg.y as number;
+          if (Number.isFinite(msg.fromX)) g.fromX = msg.fromX as number;
+          if (Number.isFinite(msg.fromY)) g.fromY = msg.fromY as number;
+          if (Number.isFinite(msg.radius)) g.radius = msg.radius as number;
+          setObjects((prev) => prev.map((o) => (o.id === msg.id ? applyGeom(o, g) : o)));
+          break;
+        }
+        case "gobj-del": {
+          const e = sanitizeClock(msg.epoch);
+          if (e === null || e < epochRef.current) break;
+          if (e > epochRef.current) catchUpEpoch(e); // пропустили «Очистить» — догоняем
+          if (typeof msg.id !== "string") break;
+          setObjects((prev) => prev.filter((o) => o.id !== msg.id));
+          break;
+        }
         case "bg": {
           const ver = sanitizeClock(msg.ver);
           if (ver === null) break;
@@ -491,7 +561,8 @@ export default function TacticsBoard({
             (strokesRef.current.length > 0 ||
               bgRef.current ||
               figuresRef.current.length > 0 ||
-              arrowsRef.current.length > 0)
+              arrowsRef.current.length > 0 ||
+              objectsRef.current.length > 0)
           )
             sendSnapshot(id);
           break;
@@ -539,6 +610,17 @@ export default function TacticsBoard({
               const byId = new Map(prev.map((a) => [a.id, a]));
               for (const a of incoming) {
                 if (byId.size < MAX_ARROWS || byId.has(a.id)) byId.set(a.id, a);
+              }
+              return Array.from(byId.values());
+            });
+          }
+          // Объекты из снапшота — слияние по id (не старее нашей последней очистки).
+          if (msg.objects && e !== null && e >= epochRef.current) {
+            const incoming = sanitizeGameObjects(msg.objects);
+            setObjects((prev) => {
+              const byId = new Map(prev.map((o) => [o.id, o]));
+              for (const o of incoming) {
+                if (byId.size < MAX_OBJECTS || byId.has(o.id)) byId.set(o.id, o);
               }
               return Array.from(byId.values());
             });
@@ -640,6 +722,7 @@ export default function TacticsBoard({
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       if (figRafRef.current != null) cancelAnimationFrame(figRafRef.current);
+      if (objRafRef.current != null) cancelAnimationFrame(objRafRef.current);
     };
   }, []);
 
@@ -737,20 +820,98 @@ export default function TacticsBoard({
     [broadcast],
   );
 
-  // Выделение фигурки и стрелки взаимоисключающее: выбор одного снимает другой,
-  // иначе по Delete удалялась бы только фигурка, а выделенная стрелка «залипала».
+  // --- Игровые объекты: добавление, геометрия (драг), правка, удаление ---
+  const addObject = useCallback(
+    (kind: ObjKind, x: number, y: number) => {
+      const id = genObjectId(`${identityRef.current}.${mountTag.current}`, objSeq.current++);
+      const def = objDef(kind);
+      const obj: GameObject = { id, kind, x, y };
+      if (def.cls === "zone") obj.radius = def.defaultRadius;
+      setObjects((prev) => (prev.length >= MAX_OBJECTS ? prev : [...prev, obj]));
+      broadcast({ t: "gobj-add", epoch: epochRef.current, obj });
+      setSelectedObjId(id);
+    },
+    [broadcast],
+  );
+
+  // Живой драг: батч-патч на кадр (как fig-move) — и локально, и по сети.
+  const flushObjMoves = useCallback(() => {
+    objRafRef.current = null;
+    const pending = objMovePending.current;
+    if (pending.size === 0) return;
+    setObjects((prev) => prev.map((o) => (pending.has(o.id) ? applyGeom(o, pending.get(o.id)!) : o)));
+    for (const [id, g] of pending) {
+      broadcast({ t: "gobj-move", epoch: epochRef.current, id, ...g });
+    }
+    pending.clear();
+  }, [broadcast]);
+
+  const objGeomLive = useCallback(
+    (id: string, g: ObjGeom) => {
+      const cur = objMovePending.current.get(id) ?? {};
+      objMovePending.current.set(id, { ...cur, ...g });
+      if (objRafRef.current == null) objRafRef.current = requestAnimationFrame(flushObjMoves);
+    },
+    [flushObjMoves],
+  );
+
+  // Коммит финальной геометрии: применяем к объекту и шлём авторитетный gobj-add.
+  const objGeomCommit = useCallback(
+    (id: string, g: ObjGeom) => {
+      objMovePending.current.delete(id);
+      const cur = objectsRef.current.find((o) => o.id === id);
+      if (!cur) return;
+      const next = applyGeom(cur, g);
+      setObjects((prev) => prev.map((o) => (o.id === id ? next : o)));
+      broadcast({ t: "gobj-add", epoch: epochRef.current, obj: next });
+    },
+    [broadcast],
+  );
+
+  const editObject = useCallback(
+    (id: string, patch: { technique?: Technique; note?: string }) => {
+      const cur = objectsRef.current.find((o) => o.id === id);
+      if (!cur) return;
+      const next: GameObject = { ...cur };
+      if ("technique" in patch) next.technique = patch.technique;
+      if ("note" in patch) {
+        const n = safeNote(patch.note);
+        next.note = n || undefined;
+      }
+      setObjects((prev) => prev.map((o) => (o.id === id ? next : o)));
+      broadcast({ t: "gobj-add", epoch: epochRef.current, obj: next });
+    },
+    [broadcast],
+  );
+
+  const deleteObject = useCallback(
+    (id: string) => {
+      setObjects((prev) => prev.filter((o) => o.id !== id));
+      setSelectedObjId((cur) => (cur === id ? null : cur));
+      broadcast({ t: "gobj-del", epoch: epochRef.current, id });
+    },
+    [broadcast],
+  );
+
+  const selectObject = useCallback((id: string | null) => {
+    setSelectedObjId(id);
+    if (id !== null) { setSelectedFigId(null); setSelectedArrowId(null); }
+  }, []);
+
+  // Выделение фигурки, стрелки и объекта взаимоисключающее: выбор одного снимает
+  // остальные, иначе по Delete удалялась бы лишь фигурка, а прочее «залипало».
   const selectFigure = useCallback((id: string | null) => {
     setSelectedFigId(id);
-    if (id !== null) setSelectedArrowId(null);
+    if (id !== null) { setSelectedArrowId(null); setSelectedObjId(null); }
   }, []);
   const selectArrow = useCallback((id: string | null) => {
     setSelectedArrowId(id);
-    if (id !== null) setSelectedFigId(null);
+    if (id !== null) { setSelectedFigId(null); setSelectedObjId(null); }
   }, []);
 
-  // Delete/Backspace удаляет выделенную фигурку или стрелку (если фокус не в поле ввода).
+  // Delete/Backspace удаляет выделенную фигурку, стрелку или объект (если фокус не в поле ввода).
   useEffect(() => {
-    if (!active || (!selectedFigId && !selectedArrowId)) return;
+    if (!active || (!selectedFigId && !selectedArrowId && !selectedObjId)) return;
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Delete" && ev.key !== "Backspace") return;
       const tag = (ev.target as HTMLElement)?.tagName;
@@ -758,10 +919,11 @@ export default function TacticsBoard({
       ev.preventDefault();
       if (selectedFigId) deleteFigure(selectedFigId);
       else if (selectedArrowId) deleteArrow(selectedArrowId);
+      else if (selectedObjId) deleteObject(selectedObjId);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, selectedFigId, selectedArrowId, deleteFigure, deleteArrow]);
+  }, [active, selectedFigId, selectedArrowId, selectedObjId, deleteFigure, deleteArrow, deleteObject]);
 
   // --- Ввод указателем ---
   const pointFromEvent = useCallback((e: React.PointerEvent): Point => {
@@ -825,8 +987,10 @@ export default function TacticsBoard({
     activeRef.current = null;
     setFigures([]);
     setArrows([]);
+    setObjects([]);
     setSelectedFigId(null);
     setSelectedArrowId(null);
+    setSelectedObjId(null);
     redraw();
     playSfx("board-clear");
     broadcast({ t: "clear", epoch: epochRef.current });
@@ -937,6 +1101,8 @@ export default function TacticsBoard({
           onSize={changeSize}
           arrowStyle={arrowStyle}
           onArrowStyle={setArrowStyle}
+          objKind={objKind}
+          onObjKind={setObjKind}
           onAddFigure={addFigure}
           onClear={clearBoard}
         />
@@ -976,6 +1142,18 @@ export default function TacticsBoard({
             "absolute inset-0 h-full w-full touch-none " +
             (tool === "draw" || tool === "erase" ? "cursor-crosshair" : "pointer-events-none")
           }
+        />
+        <GObjectLayer
+          objects={objects}
+          placing={tool === "nade"}
+          onPlace={(x, y) => addObject(objKind, x, y)}
+          draggable={tool === "move"}
+          selectedId={selectedObjId}
+          onSelect={selectObject}
+          onGeom={objGeomLive}
+          onGeomEnd={objGeomCommit}
+          onEdit={editObject}
+          onDelete={deleteObject}
         />
         <ArrowLayer
           arrows={arrows}
