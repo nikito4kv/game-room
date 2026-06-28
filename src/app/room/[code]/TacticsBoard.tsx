@@ -18,6 +18,7 @@ import {
   sanitizeClock,
   sanitizePoints,
   sanitizeStrokes,
+  type ArrowStyle,
   type BoardMessage,
   type Point,
   type Stroke,
@@ -32,8 +33,8 @@ import {
 } from "@/lib/clientStorage";
 import Banner from "@/components/Banner";
 import Icon from "@/components/Icon";
-import ElasticSlider from "@/components/ElasticSlider";
 import { playSfx } from "@/lib/audio/sfx";
+import BoardRail, { type Tool } from "./BoardRail";
 
 // Толщину кисти выбираем в «логических» px относительно эталонной ширины доски,
 // а в штрихе храним долю (px / NOMINAL_WIDTH). При рисовании доля умножается на
@@ -85,7 +86,10 @@ export default function TacticsBoard({
   const [bgAspect, setBgAspect] = useState<number | null>(null);
 
   // Инструмент. Цвет/толщина — также в localStorage (восстановим при входе).
-  const [mode, setMode] = useState<StrokeMode>("draw");
+  const [tool, setTool] = useState<Tool>("draw");
+  const [arrowStyle, setArrowStyle] = useState<ArrowStyle>("solid");
+  // Режим штриха выводится из инструмента (кисть → draw, ластик → erase).
+  const strokeMode: StrokeMode = tool === "erase" ? "erase" : "draw";
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [size, setSize] = useState(DEFAULT_SIZE);
   const [urlInput, setUrlInput] = useState("");
@@ -501,6 +505,7 @@ export default function TacticsBoard({
   }, []);
 
   function handlePointerDown(e: React.PointerEvent) {
+    if (tool !== "draw" && tool !== "erase") return; // рисует только кисть/ластик
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if (activeRef.current) return; // уже рисуем другим указателем (мультитач) — игнор
     try {
@@ -515,7 +520,7 @@ export default function TacticsBoard({
       id: `${identityRef.current}-${strokeSeq.current++}`,
       color,
       size: size / NOMINAL_WIDTH,
-      mode,
+      mode: strokeMode,
       points: [p],
     };
     activeRef.current = stroke;
@@ -543,7 +548,6 @@ export default function TacticsBoard({
   // --- Тулбар: действия ---
   function pickColor(c: string) {
     setColor(c);
-    setMode("draw");
     saveBoardColor(c);
   }
   function changeSize(v: number) {
@@ -614,58 +618,6 @@ export default function TacticsBoard({
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {PRESET_COLORS.map((c) => (
-          <button
-            key={c}
-            onClick={() => pickColor(c)}
-            aria-label={`Цвет ${c}`}
-            aria-pressed={mode === "draw" && color === c}
-            className={
-              "h-7 w-7 rounded-full border-2 transition-transform duration-100 " +
-              (mode === "draw" && color === c
-                ? "scale-110 border-text shadow-[var(--glow-accent)]"
-                : "border-border-strong hover:scale-105")
-            }
-            style={{ backgroundColor: c }}
-          />
-        ))}
-        <input
-          type="color"
-          value={color}
-          onChange={(e) => pickColor(e.target.value)}
-          aria-label="Свой цвет"
-          className="h-7 w-7 cursor-pointer rounded border border-border-strong bg-transparent p-0"
-        />
-
-        <button
-          onClick={() => setMode((m) => (m === "erase" ? "draw" : "erase"))}
-          aria-pressed={mode === "erase"}
-          className={"btn btn--sm" + (mode === "erase" ? " btn--primary" : "")}
-        >
-          <Icon name="eraser" size={15} /> Ластик
-        </button>
-
-        <div className="flex items-center gap-2 text-sm text-text-dim">
-          Толщина
-          <ElasticSlider
-            className="w-32"
-            startingValue={MIN_SIZE}
-            maxValue={MAX_SIZE}
-            defaultValue={size}
-            isStepped
-            stepSize={1}
-            showValue
-            onChange={changeSize}
-            ariaLabel="Толщина кисти"
-          />
-        </div>
-
-        <button onClick={clearBoard} className="btn btn--sm">
-          <Icon name="trash" size={15} /> Очистить
-        </button>
-      </div>
-
       {/* Смена фон-карты — только хост (загрузка авторизуется на сервере). */}
       {amHost && (
         <div className="flex flex-wrap items-center gap-2">
@@ -705,6 +657,21 @@ export default function TacticsBoard({
         className="stage relative w-full"
         style={{ aspectRatio: String(bgAspect ?? DEFAULT_ASPECT) }}
       >
+        <BoardRail
+          tool={tool}
+          onTool={setTool}
+          color={color}
+          presetColors={PRESET_COLORS}
+          onColor={pickColor}
+          size={size}
+          minSize={MIN_SIZE}
+          maxSize={MAX_SIZE}
+          onSize={changeSize}
+          arrowStyle={arrowStyle}
+          onArrowStyle={setArrowStyle}
+          onAddFigure={() => {}}
+          onClear={clearBoard}
+        />
         {/* Фон — отдельный <img>, а не CSS background: так нельзя подсунуть
             произвольную CSS-строку, и рамка точно совпадает с картинкой.
             next/image тут не подходит — src произвольный (любой URL карты,
@@ -731,7 +698,10 @@ export default function TacticsBoard({
           onPointerUp={handlePointerEnd}
           onPointerCancel={handlePointerEnd}
           onLostPointerCapture={handlePointerEnd}
-          className="absolute inset-0 h-full w-full touch-none cursor-crosshair"
+          className={
+            "absolute inset-0 h-full w-full touch-none " +
+            (tool === "draw" || tool === "erase" ? "cursor-crosshair" : "pointer-events-none")
+          }
         />
       </div>
     </section>
