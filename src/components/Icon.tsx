@@ -27,6 +27,8 @@ export type IconName =
   | "eraser"
   | "trash"
   | "map"
+  | "move"
+  | "arrow"
   | "check"
   | "dots"
   | "plus"
@@ -181,6 +183,20 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z" />
       <line x1="9" y1="4" x2="9" y2="18" />
       <line x1="15" y1="6" x2="15" y2="20" />
+    </>
+  ),
+  // четыре стрелки от центра — «перемещение»
+  move: (
+    <>
+      <path d="M12 3v18M3 12h18" />
+      <path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />
+    </>
+  ),
+  // диагональная стрелка с наконечником — инструмент «стрелка»
+  arrow: (
+    <>
+      <line x1="5" y1="19" x2="19" y2="5" />
+      <path d="M10 5h9v9" />
     </>
   ),
   check: <path d="M5 12.5 10 17 19 7" />,
