@@ -233,3 +233,14 @@ describe("sanitizeBgUrl — встроенные карты", () => {
     expect(BUILTIN_MAP_RE.test("/maps/cs2/mirage.svg")).toBe(false);
   });
 });
+
+describe("кодирование новых сообщений доски", () => {
+  it("fig-add сериализуется и разбирается без потерь", () => {
+    const msg = { t: "fig-add", epoch: 3, fig: { id: "p1", team: "ct", label: "1", x: 0.5, y: 0.5 } } as const;
+    expect(decodeBoardMessage(encodeBoardMessage(msg))).toEqual(msg);
+  });
+  it("arrow-add сериализуется и разбирается без потерь", () => {
+    const msg = { t: "arrow-add", epoch: 1, arrow: { id: "a1", color: "#fff", style: "dashed", x1: 0, y1: 0, x2: 1, y2: 1 } } as const;
+    expect(decodeBoardMessage(encodeBoardMessage(msg))).toEqual(msg);
+  });
+});

@@ -38,6 +38,8 @@ export type Arrow = { id: string; color: string; style: ArrowStyle; x1: number; 
  *   снимки несут epoch; всё с epoch меньше текущего игнорируется.
  * - `ver` — версия фона. Каждая смена/снятие фона увеличивает его; применяется
  *   только пакет с бóльшим ver (так корректно доезжает и снятие фона).
+ * - Фигурки и стрелки несут тот же `epoch`, что и штрихи, и чистятся вместе с
+ *   ними при росте epoch (одна «Очистить» сбрасывает доску целиком).
  */
 export type BoardMessage =
   // Инкрементальное продолжение штриха: точки ДОПИСЫВАЮТСЯ к штриху с этим id.
@@ -51,7 +53,17 @@ export type BoardMessage =
   // Снимок доски в ответ на sync-req (шлётся адресно). Может приходить частями
   // (стримим штрихи кусками, чтобы не упереться в лимит размера пакета WebRTC) —
   // штрихи сливаются по id, поэтому несколько частей применяются безопасно.
-  | { t: "sync-state"; epoch: number; strokes: Stroke[]; bg: string | null; bgVer: number };
+  // --- Фигурки-игроки ---
+  // Добавить ИЛИ обновить фигурку (upsert по id: смена команды/подписи/позиции).
+  | { t: "fig-add"; epoch: number; fig: Figure }
+  // Переместить фигурку (во время драга шлётся батчами через RAF).
+  | { t: "fig-move"; epoch: number; id: string; x: number; y: number }
+  // Удалить одну фигурку.
+  | { t: "fig-del"; epoch: number; id: string }
+  // --- Стрелки ---
+  | { t: "arrow-add"; epoch: number; arrow: Arrow }
+  | { t: "arrow-del"; epoch: number; id: string }
+  | { t: "sync-state"; epoch: number; strokes: Stroke[]; bg: string | null; bgVer: number; figures?: Figure[]; arrows?: Arrow[] };
 
 /** Топик data-канала, под которым живут все сообщения доски. */
 export const BOARD_TOPIC = "board";
