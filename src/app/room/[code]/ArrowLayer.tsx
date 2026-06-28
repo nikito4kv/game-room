@@ -32,8 +32,8 @@ export default function ArrowLayer({
     return { x, y };
   }
   function down(e: React.PointerEvent) {
-    // Клик мимо стрелки в режиме выделения — снять выделение.
-    if (selecting && e.target === svgRef.current) onSelect(null);
+    // Снятие выделения по клику в пустоту делает холст (он лежит под слоями) —
+    // здесь корень сквозной в режиме выделения, чтобы не перекрывать соседние слои.
     if (!drawing) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const p = norm(e);
@@ -51,7 +51,10 @@ export default function ArrowLayer({
     setDraft(null);
   }
 
-  const pe = drawing || selecting ? "auto" : "none";
+  // Корень SVG ловит указатель только при рисовании (резиновая прямая по пустому
+  // месту). В режиме выделения корень сквозной, а кликабельны лишь сами стрелки
+  // (широкие хит-линии ниже) — так слой не перекрывает фигурки/объекты/холст.
+  const pe = drawing ? "auto" : "none";
 
   return (
     <svg
@@ -78,7 +81,7 @@ export default function ArrowLayer({
               <line
                 x1={a.x1 * 100} y1={a.y1 * 100} x2={a.x2 * 100} y2={a.y2 * 100}
                 stroke="transparent" strokeWidth={3}
-                style={{ cursor: "pointer" }}
+                style={{ cursor: "pointer", pointerEvents: "auto" }}
                 onPointerDown={(e) => { e.stopPropagation(); onSelect(a.id); }}
               />
             )}
@@ -92,7 +95,7 @@ export default function ArrowLayer({
             {sel && selecting && (
               <g
                 transform={`translate(${((a.x1 + a.x2) / 2) * 100} ${((a.y1 + a.y2) / 2) * 100})`}
-                style={{ cursor: "pointer" }}
+                style={{ cursor: "pointer", pointerEvents: "auto" }}
                 onPointerDown={(e) => { e.stopPropagation(); onDelete(a.id); }}
               >
                 <circle r="2.6" fill="var(--danger)" />

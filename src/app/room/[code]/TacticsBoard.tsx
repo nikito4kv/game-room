@@ -823,13 +823,20 @@ export default function TacticsBoard({
   // --- Игровые объекты: добавление, геометрия (драг), правка, удаление ---
   const addObject = useCallback(
     (kind: ObjKind, x: number, y: number) => {
+      // Потолок проверяем ДО рассылки: иначе на пределе локально объект не
+      // добавится, а gobj-add всё равно улетит (пир ниже своего лимита его
+      // вставит → расхождение) и выделение укажет на несуществующий id.
+      if (objectsRef.current.length >= MAX_OBJECTS) return;
       const id = genObjectId(`${identityRef.current}.${mountTag.current}`, objSeq.current++);
       const def = objDef(kind);
       const obj: GameObject = { id, kind, x, y };
       if (def.cls === "zone") obj.radius = def.defaultRadius;
       setObjects((prev) => (prev.length >= MAX_OBJECTS ? prev : [...prev, obj]));
       broadcast({ t: "gobj-add", epoch: epochRef.current, obj });
+      // Выделение взаимоисключающее: ставим объект — снимаем фигурку/стрелку.
       setSelectedObjId(id);
+      setSelectedFigId(null);
+      setSelectedArrowId(null);
     },
     [broadcast],
   );
@@ -898,6 +905,15 @@ export default function TacticsBoard({
     if (id !== null) { setSelectedFigId(null); setSelectedArrowId(null); }
   }, []);
 
+  // Снять выделение со всех слоёв. Вызывается с холста (он лежит под слоями
+  // фигурок/стрелок/объектов): клик по пустому месту в режиме «Перемещение»
+  // проваливается на холст, т.к. корни слоёв сквозные (pointer-events:none).
+  const deselectAll = useCallback(() => {
+    setSelectedFigId(null);
+    setSelectedArrowId(null);
+    setSelectedObjId(null);
+  }, []);
+
   // Выделение фигурки, стрелки и объекта взаимоисключающее: выбор одного снимает
   // остальные, иначе по Delete удалялась бы лишь фигурка, а прочее «залипало».
   const selectFigure = useCallback((id: string | null) => {
@@ -931,8 +947,20 @@ export default function TacticsBoard({
   }, []);
 
   function handlePointerDown(e: React.PointerEvent) {
-    if (tool !== "draw" && tool !== "erase") return; // рисует только кисть/ластик
     if (e.button !== 0 && e.pointerType === "mouse") return;
+    // Холст лежит под слоями объектов/стрелок/фигурок и в этих режимах ловит
+    // только клики по ПУСТОМУ месту (по элементам слоёв указатель перехватывают
+    // сами элементы). Граната — поставить; перемещение — снять выделение.
+    if (tool === "nade") {
+      const [x, y] = pointFromEvent(e);
+      addObject(objKind, x, y);
+      return;
+    }
+    if (tool === "move") {
+      deselectAll();
+      return;
+    }
+    if (tool !== "draw" && tool !== "erase") return; // дальше — только кисть/ластик
     if (activeRef.current) return; // уже рисуем другим указателем (мультитач) — игнор
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -1139,14 +1167,19 @@ export default function TacticsBoard({
           onPointerCancel={handlePointerEnd}
           onLostPointerCapture={handlePointerEnd}
           className={
+            // Холст ловит указатель во всех режимах, КРОМЕ «Стрелки» (там слой
+            // стрелок рисует резиновую прямую). В «Перемещении» он нужен для снятия
+            // выделения по пустому месту, в «Гранате» — для постановки.
             "absolute inset-0 h-full w-full touch-none " +
-            (tool === "draw" || tool === "erase" ? "cursor-crosshair" : "pointer-events-none")
+            (tool === "arrow"
+              ? "pointer-events-none"
+              : tool === "move"
+                ? "cursor-default"
+                : "cursor-crosshair")
           }
         />
         <GObjectLayer
           objects={objects}
-          placing={tool === "nade"}
-          onPlace={(x, y) => addObject(objKind, x, y)}
           draggable={tool === "move"}
           selectedId={selectedObjId}
           onSelect={selectObject}

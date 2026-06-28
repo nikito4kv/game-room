@@ -53,14 +53,18 @@ export default function FigureLayer({
     dragId.current = null;
   }
 
+  // Корень всегда сквозной (pointer-events:none): перехватывают указатель только
+  // сами фигурки и только в режиме «Перемещение». Так слой не перекрывает соседние
+  // (стрелки/объекты/холст), а снятие выделения по клику в пустоту делает холст.
+  // onPointerMove/Up на корне всё равно срабатывают во время драга — события
+  // приходят по всплытию от захваченной (setPointerCapture) фигурки.
   return (
     <div
       ref={layerRef}
-      className={"absolute inset-0 " + (draggable ? "" : "pointer-events-none")}
+      className="pointer-events-none absolute inset-0"
       onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={up}
-      onClick={(e) => { if (e.target === layerRef.current) onSelect(null); }}
     >
       {figures.map((f) => {
         const s = TEAM_COLORS[f.team];
@@ -82,6 +86,7 @@ export default function FigureLayer({
               boxShadow: selected ? "0 0 0 2px var(--text)" : undefined,
               cursor: draggable ? "grab" : "default",
               touchAction: "none",
+              pointerEvents: draggable ? "auto" : "none",
             }}
           >
             {isNumber ? f.label : ""}

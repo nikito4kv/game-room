@@ -190,11 +190,20 @@ function isTeam(v: unknown): v is Team {
   return v === "ct" || v === "t";
 }
 
-/** Чистая подпись: убираем управляющие символы/переводы строк, trim, обрезаем по длине. */
-export function safeLabel(v: unknown): string {
+/**
+ * Чистка недоверенного текста: вырезаем управляющие символы (0x00–0x1F, 0x7F),
+ * trim, обрезаем по длине. Единый источник правды для подписей фигурок и заметок
+ * объектов — чтобы будущее усиление (напр. срез zero-width) не разъезжалось между
+ * копиями и не оставляло дырку в одной из них.
+ */
+function cleanText(v: unknown, maxLen: number): string {
   if (typeof v !== "string") return "";
-  // Намеренно вырезаем управляющие символы (0x00–0x1F, 0x7F) из недоверенного ввода.
-  return v.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, MAX_LABEL_LEN);
+  return v.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, maxLen);
+}
+
+/** Чистая подпись фигурки: см. cleanText. */
+export function safeLabel(v: unknown): string {
+  return cleanText(v, MAX_LABEL_LEN);
 }
 
 /** Приводит произвольный объект к корректной Figure или возвращает null. */
@@ -261,11 +270,9 @@ export function isTechnique(v: unknown): v is Technique {
   return typeof v === "string" && (TECHNIQUES as string[]).includes(v);
 }
 
-/** Чистая заметка тайминга: режем управляющие символы, trim, обрезаем по длине. */
+/** Чистая заметка тайминга объекта: см. cleanText. */
 export function safeNote(v: unknown): string {
-  if (typeof v !== "string") return "";
-  // Намеренно вырезаем управляющие символы (0x00–0x1F, 0x7F) из недоверенного ввода.
-  return v.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, MAX_NOTE_LEN);
+  return cleanText(v, MAX_NOTE_LEN);
 }
 
 function sanitizeFromPoint(raw: unknown): { x: number; y: number } | undefined {

@@ -61,10 +61,11 @@ export function applyGeom(o: GameObject, g: ObjGeom): GameObject {
   const next: GameObject = { ...o };
   if (g.x != null) next.x = clamp01(g.x);
   if (g.y != null) next.y = clamp01(g.y);
-  if (g.fromX != null || g.fromY != null) {
-    const fx = g.fromX != null ? g.fromX : next.from?.x ?? next.x;
-    const fy = g.fromY != null ? g.fromY : next.from?.y ?? next.y;
-    next.from = { x: clamp01(fx), y: clamp01(fy) };
+  // Требуем ОБЕ оси: честный отправитель всегда шлёт fromX+fromY вместе. Иначе
+  // частичный/злонамеренный пакет с одной осью сфабриковал бы точку броска (вторую
+  // ось взяв из позиции объекта) и нарисовал линию объекта самому к себе.
+  if (g.fromX != null && g.fromY != null) {
+    next.from = { x: clamp01(g.fromX), y: clamp01(g.fromY) };
   }
   if (g.radius != null) {
     next.radius = Math.min(MAX_OBJ_RADIUS, Math.max(MIN_OBJ_RADIUS, g.radius));
