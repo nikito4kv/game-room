@@ -31,11 +31,46 @@ export const TEAM_COLORS: Record<Team, { base: string; border: string; fg: strin
   t: { base: "#f5b70a", border: "#ffe39a", fg: "#1a1205" },
 };
 
+/** rgb из hex (#rgb/#rrggbb). null — если строка не похожа на hex. */
+export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return null;
+  const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+const toHex2 = (n: number) => Math.round(Math.min(255, Math.max(0, n))).toString(16).padStart(2, "0");
+
+/**
+ * Полный стиль команды из ОДНОГО цвета-заливки base: контрастный текст (fg) по
+ * воспринимаемой яркости и осветлённая обводка (border). Так кастомный цвет
+ * команды остаётся читаемым на фишке (см. FigureLayer), а хранить нужно только
+ * base. Невалидный hex → дефолтный стиль CT.
+ */
+export function teamStyle(base: string): { base: string; border: string; fg: string } {
+  const rgb = hexToRgb(base);
+  if (!rgb) return TEAM_COLORS.ct;
+  const { r, g, b } = rgb;
+  // YIQ-яркость: светлый фон → тёмный текст, тёмный фон → светлый текст.
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  const fg = brightness > 128 ? "#0b0f14" : "#ffffff";
+  // Обводка = base, подмешанный к белому (на ~60% светлее основного).
+  const mix = 0.6;
+  const border = `#${toHex2(r + (255 - r) * mix)}${toHex2(g + (255 - g) * mix)}${toHex2(b + (255 - b) * mix)}`;
+  return { base, border, fg };
+}
+
 /** Стиль стрелки: сплошная (раш) или пунктир (ротация). */
 export type ArrowStyle = "solid" | "dashed";
 
-/** Прямая стрелка между двумя точками. Координаты — нормированные 0..1. */
-export type Arrow = { id: string; color: string; style: ArrowStyle; x1: number; y1: number; x2: number; y2: number };
+/** Прямая стрелка между двумя точками. Координаты — нормированные 0..1.
+ *  size — толщина линии в экранных px (vectorEffect=non-scaling-stroke). */
+export type Arrow = { id: string; color: string; style: ArrowStyle; x1: number; y1: number; x2: number; y2: number; size?: number };
+
+/** Пределы толщины линии стрелки (экранные px). */
+export const MIN_ARROW_SIZE = 1;
+export const MAX_ARROW_SIZE = 10;
 
 /** Тип игрового объекта CS2 (граната). */
 export type ObjKind = "smoke" | "flash" | "molotov" | "he" | "decoy";
@@ -240,12 +275,18 @@ export function sanitizeArrow(raw: unknown): Arrow | null {
   if (!isArrowStyle(a.style)) return null;
   const { x1, y1, x2, y2 } = a;
   if (!isFiniteNum(x1) || !isFiniteNum(y1) || !isFiniteNum(x2) || !isFiniteNum(y2)) return null;
-  return {
+  const out: Arrow = {
     id: a.id,
     color: safeColor(a.color, "#ef4444"),
     style: a.style,
     x1: clamp01(x1), y1: clamp01(y1), x2: clamp01(x2), y2: clamp01(y2),
   };
+  // Толщину добавляем только если пришла валидной — чтобы старые стрелки без
+  // size остались идентичными самим себе (и не падали тесты на равенство).
+  if (isFiniteNum(a.size)) {
+    out.size = Math.min(MAX_ARROW_SIZE, Math.max(MIN_ARROW_SIZE, a.size));
+  }
+  return out;
 }
 
 /** Приводит входной массив стрелок к корректным Arrow[] (с кэпом MAX_ARROWS). */

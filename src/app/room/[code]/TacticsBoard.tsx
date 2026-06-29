@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useConnectionState, useDataChannel, useLocalParticipant } from "@livekit/components-react";
 import { ConnectionState } from "livekit-client";
 import {
@@ -10,12 +10,18 @@ import {
   encodeBoardMessage,
   isHexColor,
   MAX_ID_LEN,
+  MAX_OBJ_RADIUS,
+  MIN_OBJ_RADIUS,
+  MIN_ARROW_SIZE,
+  MAX_ARROW_SIZE,
   MAX_POINTS_PER_STROKE,
   MAX_STROKES,
   MAX_ARROWS,
   MAX_FIGURES,
   MAX_OBJECTS,
   normToRect,
+  TEAM_COLORS,
+  teamStyle,
   safeColor,
   safeLabel,
   safeNote,
@@ -38,14 +44,21 @@ import {
   type Point,
   type Stroke,
   type StrokeMode,
+  type Team,
   type Technique,
 } from "@/lib/board";
 import {
+  getBoardArrowSize,
   getBoardColor,
+  getBoardObjRadii,
   getBoardSize,
   getHostKey,
+  getTeamColors,
+  setBoardArrowSize as saveBoardArrowSize,
   setBoardColor as saveBoardColor,
+  setBoardObjRadii as saveBoardObjRadii,
   setBoardSize as saveBoardSize,
+  setTeamColors as saveTeamColors,
 } from "@/lib/clientStorage";
 import Banner from "@/components/Banner";
 import Icon from "@/components/Icon";
@@ -55,7 +68,7 @@ import MapPicker from "./MapPicker";
 import FigureLayer from "./FigureLayer";
 import ArrowLayer from "./ArrowLayer";
 import { genFigureId, nextFigureNumber } from "@/lib/boardFigures";
-import { applyGeom, genObjectId, objDef, type ObjGeom } from "@/lib/boardObjects";
+import { applyGeom, CS2_OBJECTS, genObjectId, objClass, objDef, type ObjGeom } from "@/lib/boardObjects";
 import GObjectLayer from "./GObjectLayer";
 import { mapAspect, type GameMap } from "@/lib/maps";
 
@@ -65,13 +78,19 @@ import { mapAspect, type GameMap } from "@/lib/maps";
 const NOMINAL_WIDTH = 1000;
 const MIN_SIZE = 1;
 const MAX_SIZE = 20;
-const PRESET_COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#ffffff", "#111827"];
 const DEFAULT_COLOR = "#ef4444";
 const DEFAULT_SIZE = 4;
 const DEFAULT_ASPECT = 16 / 9;
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const clampSize = (n: number) => Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.round(n)));
+const clampRadius = (n: number) => Math.min(MAX_OBJ_RADIUS, Math.max(MIN_OBJ_RADIUS, n));
+const clampArrowSize = (n: number) => Math.min(MAX_ARROW_SIZE, Math.max(MIN_ARROW_SIZE, Math.round(n)));
+
+// Дефолтные радиусы zone-гранат (доля ширины доски) — сид для стейта/слайдера.
+const DEFAULT_OBJ_RADII: Partial<Record<ObjKind, number>> = Object.fromEntries(
+  CS2_OBJECTS.filter((d) => d.cls === "zone").map((d) => [d.kind, d.defaultRadius!]),
+);
 
 /**
  * Доска тактик: рамка с фоном-картой + прозрачный холст для рисунков. Рисунки
@@ -98,6 +117,10 @@ export default function TacticsBoard({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Строка «рельс + сцена» — по ней (стабильная ширина, не зависит от размера
+  // сцены) меряем доступное место и вписываем прямоугольник нужных пропорций.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
 
   // Источник правды для перерисовки — мутируемый массив (не гоняем re-render на
   // каждую точку). Фон держим и в state (для рендера), и в ref (для onMessage).
@@ -112,6 +135,8 @@ export default function TacticsBoard({
   const [figures, setFigures] = useState<Figure[]>([]);
   const figuresRef = useRef<Figure[]>([]);
   const [selectedFigId, setSelectedFigId] = useState<string | null>(null);
+  // Команда, «заряженная» для постановки по клику (null — обычный режим).
+  const [pendingTeam, setPendingTeam] = useState<Team | null>(null);
   const figSeq = useRef(0);
   // Уникальный токен на каждый монтаж компонента: входит в id фигурок/стрелок,
   // чтобы после перезагрузки/ремаунта счётчики с нуля не дали id, который у пиров
@@ -139,6 +164,8 @@ export default function TacticsBoard({
   const objectsRef = useRef<GameObject[]>([]);
   const [selectedObjId, setSelectedObjId] = useState<string | null>(null);
   const [objKind, setObjKind] = useState<ObjKind>("smoke");
+  // Дефолтные радиусы по типу зоны (доля ширины) — «для себя», персист в localStorage.
+  const [objRadii, setObjRadii] = useState<Partial<Record<ObjKind, number>>>(() => ({ ...DEFAULT_OBJ_RADII }));
   const objSeq = useRef(0);
   const objMovePending = useRef<Map<string, ObjGeom>>(new Map());
   const objRafRef = useRef<number | null>(null);
@@ -149,13 +176,50 @@ export default function TacticsBoard({
   // Инструмент. Цвет/толщина — также в localStorage (восстановим при входе).
   const [tool, setTool] = useState<Tool>("draw");
   const [arrowStyle, setArrowStyle] = useState<ArrowStyle>("solid");
+  // Толщина линии стрелки (экранные px) — отдельно от кисти.
+  const [arrowSize, setArrowSize] = useState(2);
   // Режим штриха выводится из инструмента (кисть → draw, ластик → erase).
   const strokeMode: StrokeMode = tool === "erase" ? "erase" : "draw";
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [size, setSize] = useState(DEFAULT_SIZE);
+  // Цвет команды храним ОДНИМ значением (заливка base) — локальная косметика, не в
+  // протоколе, персист в localStorage. Полный стиль {base,border,fg} выводим из base
+  // (см. teamStyle), чтобы обводка/текст оставались читаемы на кастомном цвете.
+  const [teamBase, setTeamBase] = useState<Record<Team, string>>(() => ({ ct: TEAM_COLORS.ct.base, t: TEAM_COLORS.t.base }));
+  const teamColors = useMemo(() => ({ ct: teamStyle(teamBase.ct), t: teamStyle(teamBase.t) }), [teamBase]);
+  // Кольцо-превью у курсора позиционируем императивно через ref (без setState на
+  // каждое движение мыши — это горячий путь рисования).
+  const cursorRingRef = useRef<HTMLDivElement>(null);
+  const cursorRaf = useRef<number | null>(null);
+  // Дебаунс записи «для себя» в localStorage: слайдер/пикёр шлют десятки событий
+  // за драг, а синхронный setItem на каждый тик блокировал бы поток. Стейт при
+  // этом обновляется вживую — откладываем только персист.
+  const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const debouncedSave = useCallback((key: string, fn: () => void, ms = 250) => {
+    clearTimeout(saveTimers.current[key]);
+    saveTimers.current[key] = setTimeout(fn, ms);
+  }, []);
+  useEffect(() => {
+    const timers = saveTimers.current;
+    return () => { for (const id of Object.values(timers)) clearTimeout(id); };
+  }, []);
   const [urlInput, setUrlInput] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Верхняя панель: меню «Ещё» (ссылка-фон/убрать) и статус копирования ссылки.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
+  // Закрытие меню «Ещё» по клику вне его (бэкдроп через position:fixed не годится —
+  // backdrop-blur панели создаёт containing block, и fixed липнет к панели, не к окну).
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [moreOpen]);
 
   // Версии состояния (логические часы), чтобы поздние/повторные пакеты не
   // воскрешали стёртое. epoch растёт на каждую «Очистить»; bgVer — на смену фона.
@@ -181,13 +245,30 @@ export default function TacticsBoard({
     identityRef.current = localParticipant.identity;
   }, [localParticipant.identity]);
 
-  // --- Восстановление настроек кисти ---
+  // --- Восстановление настроек (кисть, радиусы гранат, цвета команд) ---
   useEffect(() => {
     const c = getBoardColor();
     const s = getBoardSize();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое чтение localStorage
+    const as = getBoardArrowSize();
+    const savedRadii = getBoardObjRadii();
+    const savedColors = getTeamColors();
+    // Радиусы гранат: мерджим сохранённое поверх дефолтов и зажимаем в пределы.
+    const radii: Partial<Record<ObjKind, number>> = { ...DEFAULT_OBJ_RADII };
+    for (const d of CS2_OBJECTS) {
+      if (d.cls !== "zone") continue;
+      const r = savedRadii[d.kind];
+      if (typeof r === "number" && Number.isFinite(r)) radii[d.kind] = clampRadius(r);
+    }
+    /* eslint-disable react-hooks/set-state-in-effect -- одноразовое чтение localStorage */
     if (isHexColor(c)) setColor(c);
     if (s != null) setSize(clampSize(s));
+    if (as != null) setArrowSize(clampArrowSize(as));
+    setObjRadii(radii);
+    setTeamBase((prev) => ({
+      ct: isHexColor(savedColors.ct) ? savedColors.ct : prev.ct,
+      t: isHexColor(savedColors.t) ? savedColors.t : prev.t,
+    }));
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   // --- Рисование на холсте ---
@@ -303,6 +384,56 @@ export default function TacticsBoard({
     ro.observe(container);
     return () => ro.disconnect();
   }, [syncSize]);
+
+  // Размер сцены вычисляем сами: вписываем прямоугольник пропорций карты в
+  // доступное место (ширина обёртки × высота вьюпорта минус панель/док), беря
+  // максимум, что влезает целиком. Так квадратная карта — ровный квадрат «как
+  // раз по высоте», без пустот по бокам и без прыжков при смене инструмента.
+  const ar = bgAspect ?? 1;
+  useEffect(() => {
+    const row = rowRef.current;
+    // Центральная колонка (section → stage-overlay → column): её высота стабильна
+    // (flex-1 + min-h-0, не зависит от размера сцены) — берём её как доступную
+    // высоту, чтобы квадрат всегда влезал без вертикального скролла.
+    const col = sectionRef.current?.parentElement?.parentElement ?? null;
+    if (!row) return;
+    const measure = () => {
+      const rowW = row.clientWidth;
+      if (rowW === 0) return; // скрыто
+      // В полноэкранном режиме секция (sectionRef) сама занимает вьюпорт, а её
+      // родительская колонка остаётся «страничной» высоты — поэтому меряем по
+      // самой секции (padding-box уже учитывает [&:fullscreen]:p-6).
+      const section = sectionRef.current;
+      const fs = !!section && document.fullscreenElement === section;
+      // На ≥sm рельс слева + балансирующий спейсер справа той же ширины (чтобы
+      // квадрат стоял ровно по центру, на одной оси с заголовком): 2×(46+12).
+      const wide = window.innerWidth >= 640;
+      const availW = Math.max(120, rowW - (wide ? 116 : 0));
+      // Обычный режим: высота колонки (flex-1) уже учитывает нижний резерв под
+      // док/кружки — <main> держит pb-40; вычитаем только верхнюю панель (~64).
+      // Fullscreen: берём высоту самой секции (минус небольшой зазор сверху/снизу).
+      const colH = col?.clientHeight ?? window.innerHeight;
+      const availH = fs ? Math.max(240, section!.clientHeight - 16) : Math.max(240, colH - 64);
+      let w = availW;
+      let h = w / ar;
+      if (h > availH) {
+        h = availH;
+        w = h * ar;
+      }
+      setBox({ w: Math.round(w), h: Math.round(h) });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(row);
+    if (col) ro.observe(col);
+    window.addEventListener("resize", measure);
+    document.addEventListener("fullscreenchange", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+      document.removeEventListener("fullscreenchange", measure);
+    };
+  }, [ar]);
 
   // --- Сеть ---
   const broadcast = useCallback(
@@ -727,8 +858,10 @@ export default function TacticsBoard({
   }, []);
 
   // --- Фигурки: добавление, правка подписи, перемещение, удаление ---
+  // Ставим фигурку по КЛИКУ на доске (а не сразу в центр): рельс лишь «заряжает»
+  // команду (pendingTeam), следующий клик по сцене кладёт фишку в это место.
   const addFigure = useCallback(
-    (team: "ct" | "t") => {
+    (team: Team, x: number, y: number) => {
       // id берём вне апдейтера (счётчик растёт один раз). Номер считаем ВНУТРИ по
       // актуальному prev — иначе два быстрых клика подряд (ref ещё не обновлён
       // эффектом) дали бы одинаковый номер. fig-add идемпотентен по id, поэтому
@@ -736,13 +869,35 @@ export default function TacticsBoard({
       const id = genFigureId(`${identityRef.current}.${mountTag.current}`, figSeq.current++);
       setFigures((prev) => {
         if (prev.length >= MAX_FIGURES) return prev;
-        const fig: Figure = { id, team, label: String(nextFigureNumber(prev, team)), x: 0.5, y: 0.5 };
+        const fig: Figure = { id, team, label: String(nextFigureNumber(prev, team)), x: clamp01(x), y: clamp01(y) };
         broadcast({ t: "fig-add", epoch: epochRef.current, fig });
         return [...prev, fig];
       });
     },
     [broadcast],
   );
+
+  // Команда CT/T работает как обычный инструмент: нажал — ставишь фишки кликами
+  // сколько нужно; нажал ту же команду ещё раз — выключился. Включаем режим
+  // «Перемещение», чтобы клики по пустому месту доходили до холста (в «Стрелке»
+  // их перехватил бы слой стрелок). Снимаем выделение при включении.
+  const armFigure = useCallback((team: Team) => {
+    if (pendingTeam === team) {
+      setPendingTeam(null); // повторное нажатие выключает инструмент фишки
+      return;
+    }
+    setPendingTeam(team);
+    setTool("move");
+    setSelectedFigId(null);
+    setSelectedArrowId(null);
+    setSelectedObjId(null);
+  }, [pendingTeam]);
+
+  // Выбор инструмента из рельса снимает «заряженную» команду постановки.
+  const chooseTool = useCallback((t: Tool) => {
+    setTool(t);
+    setPendingTeam(null);
+  }, []);
 
   // Правка подписи = повторный fig-add (upsert по id). Чистим подпись санитайзером.
   const editFigureLabel = useCallback(
@@ -803,12 +958,13 @@ export default function TacticsBoard({
         id: `${identityRef.current}.${mountTag.current}-arr-${arrowSeq.current++}`,
         color,
         style: arrowStyle,
+        size: arrowSize,
         ...g,
       };
       setArrows((prev) => (prev.length >= MAX_ARROWS ? prev : [...prev, arrow]));
       broadcast({ t: "arrow-add", epoch: epochRef.current, arrow });
     },
-    [broadcast, color, arrowStyle],
+    [broadcast, color, arrowStyle, arrowSize],
   );
 
   const deleteArrow = useCallback(
@@ -830,7 +986,7 @@ export default function TacticsBoard({
       const id = genObjectId(`${identityRef.current}.${mountTag.current}`, objSeq.current++);
       const def = objDef(kind);
       const obj: GameObject = { id, kind, x, y };
-      if (def.cls === "zone") obj.radius = def.defaultRadius;
+      if (def.cls === "zone") obj.radius = objRadii[kind] ?? def.defaultRadius;
       setObjects((prev) => (prev.length >= MAX_OBJECTS ? prev : [...prev, obj]));
       broadcast({ t: "gobj-add", epoch: epochRef.current, obj });
       // Выделение взаимоисключающее: ставим объект — снимаем фигурку/стрелку.
@@ -838,7 +994,7 @@ export default function TacticsBoard({
       setSelectedFigId(null);
       setSelectedArrowId(null);
     },
-    [broadcast],
+    [broadcast, objRadii],
   );
 
   // Живой драг: батч-патч на кадр (как fig-move) — и локально, и по сети.
@@ -941,6 +1097,29 @@ export default function TacticsBoard({
     return () => window.removeEventListener("keydown", onKey);
   }, [active, selectedFigId, selectedArrowId, selectedObjId, deleteFigure, deleteArrow, deleteObject]);
 
+  // Горячие клавиши инструментов (Q/W/E/A/G). Коды клавиш (e.code, не зависят от
+  // раскладки) подобраны бесконфликтно с голосовыми биндами (M/D/S/V/Digit2).
+  // Активны только когда доска видима и фокус не в поле ввода.
+  useEffect(() => {
+    if (!active) return;
+    const TOOL_KEYS: Record<string, Tool> = {
+      KeyQ: "move", KeyW: "draw", KeyE: "erase", KeyA: "arrow", KeyG: "nade",
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const tag = (ev.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (ev.code === "Escape") { setPendingTeam(null); return; } // отменить постановку фишки
+      const t = TOOL_KEYS[ev.code];
+      if (!t) return;
+      ev.preventDefault();
+      setTool(t);
+      setPendingTeam(null); // смена инструмента снимает «заряженную» команду
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
+
   // --- Ввод указателем ---
   const pointFromEvent = useCallback((e: React.PointerEvent): Point => {
     return normToRect(e.clientX, e.clientY, canvasRef.current!.getBoundingClientRect());
@@ -948,6 +1127,13 @@ export default function TacticsBoard({
 
   function handlePointerDown(e: React.PointerEvent) {
     if (e.button !== 0 && e.pointerType === "mouse") return;
+    // Заряжена команда — ставим фишку в точку клика. Заряд НЕ снимаем: как обычный
+    // инструмент, ставим сколько нужно (выключается повторным кликом по CT/T или Esc).
+    if (pendingTeam) {
+      const [x, y] = pointFromEvent(e);
+      addFigure(pendingTeam, x, y);
+      return;
+    }
     // Холст лежит под слоями объектов/стрелок/фигурок и в этих режимах ловит
     // только клики по ПУСТОМУ месту (по элементам слоёв указатель перехватывают
     // сами элементы). Граната — поставить; перемещение — снять выделение.
@@ -1009,6 +1195,56 @@ export default function TacticsBoard({
     setSize(s);
     saveBoardSize(s);
   }
+  function changeArrowSize(v: number) {
+    const s = clampArrowSize(v);
+    setArrowSize(s);
+    debouncedSave("arrowSize", () => saveBoardArrowSize(s));
+  }
+  // Радиус: задаёт дефолт для новых гранат активного типа И, если выбран
+  // zone-объект, двигает его радиус вживую (штатный коммит → синхрон по сети).
+  function changeObjRadius(r: number) {
+    const clamped = clampRadius(r);
+    const next = { ...objRadii, [objKind]: clamped };
+    setObjRadii(next);
+    debouncedSave("objRadii", () => saveBoardObjRadii(next as Record<string, number>));
+    // Радиус правим только у zone-объекта; у icon-объекта (флеш/дэкой) его нет.
+    if (selectedObjId) {
+      const sel = objectsRef.current.find((o) => o.id === selectedObjId);
+      if (sel && objClass(sel.kind) === "zone") objGeomCommit(selectedObjId, { radius: clamped });
+    }
+  }
+  // Цвет команды — локально (только заливка base), персист в localStorage.
+  function changeTeamColor(team: Team, base: string) {
+    const next = { ...teamBase, [team]: base };
+    setTeamBase(next);
+    debouncedSave("teamColors", () => saveTeamColors(next));
+  }
+  // Курсор над сценой: позиционируем кольцо-превью императивно (через ref + rAF),
+  // без setState — это горячий путь рисования. Кольцо нужно только для кисти/
+  // ластика и zone-гранаты; иначе прячем.
+  function trackCursor(e: React.PointerEvent) {
+    const ringEl = cursorRingRef.current;
+    if (!ringEl) return;
+    const showRing = tool === "draw" || tool === "erase" || (tool === "nade" && objClass(objKind) === "zone");
+    if (!showRing) {
+      ringEl.style.display = "none";
+      return;
+    }
+    const el = containerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    if (cursorRaf.current != null) cancelAnimationFrame(cursorRaf.current);
+    cursorRaf.current = requestAnimationFrame(() => {
+      ringEl.style.display = "block";
+      ringEl.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+    });
+  }
+  function hideCursorRing() {
+    if (cursorRaf.current != null) cancelAnimationFrame(cursorRaf.current);
+    if (cursorRingRef.current) cursorRingRef.current.style.display = "none";
+  }
   function clearBoard() {
     epochRef.current += 1; // новая эпоха — отбрасывает поздние/повторные старые штрихи
     strokesRef.current = [];
@@ -1038,6 +1274,14 @@ export default function TacticsBoard({
     }
     setUploadError(null);
     setBackground(url);
+    setMoreOpen(false);
+  }
+
+  // Доску — на весь экран (сама секция, чтобы рельс с инструментами остался).
+  function toggleFullscreen() {
+    const el = sectionRef.current;
+    if (!document.fullscreenElement) el?.requestFullscreen?.().catch(() => {});
+    else document.exitFullscreen?.().catch(() => {});
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1076,52 +1320,53 @@ export default function TacticsBoard({
     }
   }
 
-  return (
-    <section className="flex flex-col gap-3">
-      {/* Смена фон-карты — только хост (загрузка авторизуется на сервере). */}
-      {amHost && (
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="btn btn--sm cursor-pointer">
-            <Icon name="map" size={15} />
-            {uploading ? "Загрузка…" : "Загрузить карту"}
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleUpload}
-              disabled={uploading}
-              className="hidden"
-            />
-          </label>
-          <input
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && applyUrlBg()}
-            placeholder="…или ссылка на картинку"
-            className="field min-w-0 flex-1"
-          />
-          <button onClick={applyUrlBg} className="btn btn--sm">
-            Применить
-          </button>
-          {bg && (
-            <button onClick={() => setBackground(null)} className="btn btn--sm">
-              Убрать фон
-            </button>
-          )}
-        </div>
-      )}
+  // Кольцо-превью у курсора: кисть/ластик → диаметр = толщина линии в CSS-px;
+  // zone-граната → диаметр зоны. Прочие инструменты — без кольца. Геометрия зависит
+  // от инструмента/размера/ширины сцены (box.w), но НЕ от позиции курсора — её
+  // считаем через useMemo, а позицию двигаем императивно (см. trackCursor).
+  const objRadiusValue = objRadii[objKind] ?? objDef(objKind).defaultRadius ?? 0.05;
+  const ring = useMemo(() => {
+    const w = box.w;
+    if (w <= 0) return null;
+    if (tool === "draw" || tool === "erase") {
+      const d = Math.max(2, (size / NOMINAL_WIDTH) * w);
+      return { d, color: tool === "erase" ? "var(--text-dim)" : color, fill: "transparent" };
+    }
+    if (tool === "nade" && objClass(objKind) === "zone") {
+      const c = objDef(objKind).color;
+      return { d: 2 * objRadiusValue * w, color: c, fill: `${c}33` };
+    }
+    return null;
+  }, [box.w, tool, size, color, objKind, objRadiusValue]);
 
+  // Применяем геометрию кольца к элементу при её смене; позицию НЕ трогаем (её
+  // двигает trackCursor). Когда кольцо не нужно — прячем.
+  useEffect(() => {
+    const el = cursorRingRef.current;
+    if (!el) return;
+    if (!ring) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.width = `${ring.d}px`;
+    el.style.height = `${ring.d}px`;
+    el.style.border = `1.5px solid ${ring.color}`;
+    el.style.background = ring.fill;
+  }, [ring]);
+
+  return (
+    // Фон секции — только в полноэкранном режиме; в обычном пусть просвечивает
+    // градиент страницы (без сплошного чёрного прямоугольника вокруг доски).
+    <section ref={sectionRef} className="flex flex-col gap-3 [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:bg-bg [&:fullscreen]:p-6">
       {uploadError && <Banner tone="warn">{uploadError}</Banner>}
 
-      <div
-        ref={containerRef}
-        className="stage relative w-full"
-        style={{ aspectRatio: String(bgAspect ?? DEFAULT_ASPECT) }}
-      >
+      {/* Рельс + сцена центрируются как единый кластер — рельс вплотную к квадрату,
+          без пустоты между ними. На узких экранах рельс складывается над доской. */}
+      <div ref={rowRef} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-center">
         <BoardRail
           tool={tool}
-          onTool={setTool}
+          onTool={chooseTool}
           color={color}
-          presetColors={PRESET_COLORS}
           onColor={pickColor}
           size={size}
           minSize={MIN_SIZE}
@@ -1129,17 +1374,74 @@ export default function TacticsBoard({
           onSize={changeSize}
           arrowStyle={arrowStyle}
           onArrowStyle={setArrowStyle}
+          arrowSize={arrowSize}
+          onArrowSize={changeArrowSize}
           objKind={objKind}
           onObjKind={setObjKind}
-          onAddFigure={addFigure}
+          objRadius={objRadiusValue}
+          onObjRadius={changeObjRadius}
+          teamColors={teamColors}
+          onTeamColor={changeTeamColor}
+          pendingTeam={pendingTeam}
+          onArmFigure={armFigure}
           onClear={clearBoard}
         />
-        {amHost && (
-          <MapPicker
-            currentSrc={bg}
-            onPick={(m: GameMap) => setBackground(m.src)}
-          />
-        )}
+
+        {/* Правая колонка: верхняя панель (ровно по ширине квадрата) + сцена.
+            На ≥sm колонка сжимается до ширины квадрата (sm:w-auto), кластер центрируется. */}
+        <div className="flex w-full min-w-0 flex-col gap-3 sm:w-auto">
+          {/* Панель управления картой — только хост. relative z-30 — иначе её
+              выпадашки (выбор карты, «Ещё») уходят за крупную сцену. */}
+          {amHost && (
+            <div
+              className="relative z-30 flex w-full items-center gap-1 rounded-[var(--radius)] border border-border bg-surface/80 px-1.5 py-1 text-[13px] backdrop-blur"
+              style={{ width: box.w || undefined }}
+            >
+              <MapPicker currentSrc={bg} onPick={(m: GameMap) => setBackground(m.src)} />
+              <div className="flex-1" />
+              <label className="btn btn--sm h-8 cursor-pointer gap-1.5 px-2.5 text-[13px] font-medium" title="Загрузить карту">
+                <UploadIcon />
+                <span className="hidden md:inline">{uploading ? "Загрузка…" : "Загрузить карту"}</span>
+                <input type="file" accept="image/*" onChange={handleUpload} disabled={uploading} className="hidden" />
+              </label>
+              <IconBtn title="На весь экран" onClick={toggleFullscreen}>
+                <FullscreenIcon />
+              </IconBtn>
+              <div className="relative" ref={moreRef}>
+                <IconBtn title="Ещё" onClick={() => setMoreOpen((v) => !v)} active={moreOpen}>
+                  <Icon name="dots" size={18} />
+                </IconBtn>
+                {moreOpen && (
+                    <div className="absolute right-0 top-full z-50 mt-1 flex w-72 flex-col gap-2 rounded-[var(--radius)] border border-border-strong bg-surface-2 p-2 shadow-[var(--shadow-2)]">
+                      <input
+                        value={urlInput}
+                        onChange={(e) => setUrlInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && applyUrlBg()}
+                        placeholder="Ссылка на картинку"
+                        className="field w-full"
+                      />
+                      <div className="flex gap-2">
+                        <button onClick={applyUrlBg} className="btn btn--sm btn--primary flex-1">Применить</button>
+                        {bg && (
+                          <button onClick={() => { setBackground(null); setMoreOpen(false); }} className="btn btn--sm">
+                            Убрать фон
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-center">
+          <div
+            ref={containerRef}
+            className="stage relative max-w-full"
+            style={{ width: box.w || "100%", height: box.h || undefined, aspectRatio: box.w ? undefined : String(bgAspect ?? DEFAULT_ASPECT) }}
+            onPointerMove={trackCursor}
+            onPointerLeave={hideCursorRing}
+          >
         {/* Фон — отдельный <img>, а не CSS background: так нельзя подсунуть
             произвольную CSS-строку, и рамка точно совпадает с картинкой.
             next/image тут не подходит — src произвольный (любой URL карты,
@@ -1171,11 +1473,13 @@ export default function TacticsBoard({
             // стрелок рисует резиновую прямую). В «Перемещении» он нужен для снятия
             // выделения по пустому месту, в «Гранате» — для постановки.
             "absolute inset-0 h-full w-full touch-none " +
-            (tool === "arrow"
-              ? "pointer-events-none"
-              : tool === "move"
-                ? "cursor-default"
-                : "cursor-crosshair")
+            (pendingTeam
+              ? "cursor-crosshair"
+              : tool === "arrow"
+                ? "pointer-events-none"
+                : tool === "move"
+                  ? "cursor-default"
+                  : "cursor-crosshair")
           }
         />
         <GObjectLayer
@@ -1194,6 +1498,7 @@ export default function TacticsBoard({
           selecting={tool === "move"}
           color={color}
           style={arrowStyle}
+          size={arrowSize}
           selectedId={selectedArrowId}
           onSelect={selectArrow}
           onCommit={addArrow}
@@ -1208,8 +1513,67 @@ export default function TacticsBoard({
           onMoveEnd={moveFigureCommit}
           onEditLabel={editFigureLabel}
           onDelete={deleteFigure}
+          teamColors={teamColors}
         />
+        {/* Кольцо-превью у курсора (толщина кисти/радиус зоны) — чисто визуально.
+            Всегда смонтировано, скрыто по умолчанию; позицию/геометрию пишем через
+            ref (без ре-рендера на каждое движение мыши). */}
+        <div
+          ref={cursorRingRef}
+          aria-hidden
+          className="pointer-events-none absolute left-0 top-0 rounded-full"
+          style={{ display: "none" }}
+        />
+        </div>
+        </div>
+        </div>
+        {/* Балансир справа — той же ширины, что и рельс слева: квадрат встаёт
+            ровно по центру, на одной оси с заголовком комнаты. */}
+        <div className="hidden w-[46px] shrink-0 sm:block" aria-hidden />
       </div>
     </section>
+  );
+}
+
+/** Компактная иконка-кнопка верхней панели (36px, как в рельсе). */
+function IconBtn({
+  title, onClick, active, children,
+}: {
+  title: string; onClick: () => void; active?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className={
+        "flex h-8 w-8 items-center justify-center rounded-lg transition-colors " +
+        (active ? "bg-surface text-text" : "text-text-dim hover:bg-surface hover:text-text")
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="M7 10l5-5 5 5" />
+      <path d="M12 5v12" />
+    </svg>
+  );
+}
+
+function FullscreenIcon() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+      <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+      <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+      <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+    </svg>
   );
 }

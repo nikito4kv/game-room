@@ -4,7 +4,8 @@ import { useState } from "react";
 import Icon from "@/components/Icon";
 import { CS2_MAPS, type GameMap } from "@/lib/maps";
 
-/** Чип-дропдаун выбора встроенной карты. Показывается только хосту. */
+/** Чип-дропдаун выбора встроенной карты. Живёт в верхней панели (inline,
+ *  не overlay); relative — чтобы выпадающий список позиционировался от кнопки. */
 export default function MapPicker({
   currentSrc,
   onPick,
@@ -16,21 +17,21 @@ export default function MapPicker({
   const current = CS2_MAPS.find((m) => m.src === currentSrc);
 
   return (
-    <div className="absolute right-2 top-2 z-[var(--z-dropdown,100)]">
+    <div className="relative z-[var(--z-dropdown,100)]">
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-surface/90 px-3 py-2 text-sm text-text backdrop-blur"
+        className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius)] border border-border bg-surface/90 px-2.5 text-[13px] text-text backdrop-blur"
       >
-        <Icon name="map" size={16} />
+        <Icon name="map" size={15} />
         {current ? current.name : "Выбрать карту"}
         <span className="text-text-mute">▾</span>
       </button>
       {open && (
         <ul
           role="listbox"
-          className="absolute right-0 mt-1 max-h-72 w-44 overflow-auto rounded-[var(--radius)] border border-border-strong bg-surface-2 p-1 shadow-[var(--shadow-2)]"
+          className="absolute left-0 mt-1 max-h-72 w-44 overflow-auto rounded-[var(--radius)] border border-border-strong bg-surface-2 p-1 shadow-[var(--shadow-2)]"
         >
           {CS2_MAPS.map((m) => (
             <li key={m.id}>

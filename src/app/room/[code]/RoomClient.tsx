@@ -1008,7 +1008,7 @@ function RoomView({
       {/* Центр: оверлей-сцена (экран/доска) + кружки участников. Оба контентных
           блока ВСЕГДА смонтированы; неактивный скрыт через hidden (доска не теряет
           накопленный рисунок и подписку на data-канал). */}
-      <div className="flex w-full max-w-5xl flex-1 flex-col items-center justify-center gap-4">
+      <div className="flex w-full min-h-0 max-w-5xl flex-1 flex-col items-center justify-center gap-4">
         <div className={view === "screen" ? "stage-overlay" : "hidden"}>
           <ScreenShareStage screens={screens} />
         </div>

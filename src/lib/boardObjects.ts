@@ -21,9 +21,9 @@ export type ObjKindDef = {
 };
 
 export const CS2_OBJECTS: ObjKindDef[] = [
-  { kind: "smoke",   name: "Смок",    cls: "zone", color: "#cdd6df", icon: "nade-smoke",   defaultRadius: 0.07 },
-  { kind: "molotov", name: "Молотов", cls: "zone", color: "#ff8a1e", icon: "nade-molotov", defaultRadius: 0.06 },
-  { kind: "he",      name: "HE",      cls: "zone", color: "#ffb02e", icon: "nade-he",      defaultRadius: 0.05 },
+  { kind: "smoke",   name: "Смок",    cls: "zone", color: "#cdd6df", icon: "nade-smoke",   defaultRadius: 0.05 },
+  { kind: "molotov", name: "Молотов", cls: "zone", color: "#ff8a1e", icon: "nade-molotov", defaultRadius: 0.045 },
+  { kind: "he",      name: "HE",      cls: "zone", color: "#ffb02e", icon: "nade-he",      defaultRadius: 0.04 },
   { kind: "flash",   name: "Флеш",    cls: "icon", color: "#dcefff", icon: "nade-flash" },
   { kind: "decoy",   name: "Дэкой",   cls: "icon", color: "#34d399", icon: "nade-decoy" },
 ];

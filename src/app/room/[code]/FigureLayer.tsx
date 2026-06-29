@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef } from "react";
-import { normToRect, TEAM_COLORS, type Figure } from "@/lib/board";
+import { normToRect, TEAM_COLORS, type Figure, type Team } from "@/lib/board";
+
+type TeamColors = Record<Team, { base: string; border: string; fg: string }>;
 
 /**
  * DOM-слой фигурок поверх доски. Указатель ловит только когда draggable (режим
@@ -10,6 +12,7 @@ import { normToRect, TEAM_COLORS, type Figure } from "@/lib/board";
  */
 export default function FigureLayer({
   figures, draggable, selectedId, onSelect, onMove, onMoveEnd, onEditLabel, onDelete,
+  teamColors = TEAM_COLORS,
 }: {
   figures: Figure[];
   draggable: boolean;
@@ -19,6 +22,7 @@ export default function FigureLayer({
   onMoveEnd: (id: string, x: number, y: number) => void;
   onEditLabel: (id: string, label: string) => void;
   onDelete: (id: string) => void;
+  teamColors?: TeamColors;
 }) {
   const layerRef = useRef<HTMLDivElement>(null);
   const dragId = useRef<string | null>(null);
@@ -67,7 +71,7 @@ export default function FigureLayer({
       onPointerCancel={up}
     >
       {figures.map((f) => {
-        const s = TEAM_COLORS[f.team];
+        const s = teamColors[f.team];
         const selected = f.id === selectedId;
         const isNumber = /^\d+$/.test(f.label);
         return (

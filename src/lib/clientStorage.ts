@@ -8,6 +8,9 @@ const hostKeyKey = (code: string) => `gr.host.${code}`;
 const entryKey = (code: string) => `gr.entry.${code}`;
 const BOARD_COLOR_KEY = "gr.board.color";
 const BOARD_SIZE_KEY = "gr.board.size";
+const BOARD_ARROW_SIZE_KEY = "gr.board.arrowSize";
+const BOARD_OBJ_RADII_KEY = "gr.board.objRadii";
+const BOARD_TEAM_COLORS_KEY = "gr.board.teamColors";
 
 const AUDIO_INPUT_DEVICE_KEY = "gr.audio.inputDevice";
 const AUDIO_OUTPUT_DEVICE_KEY = "gr.audio.outputDevice";
@@ -124,6 +127,38 @@ export function getBoardSize(): number | null {
 }
 export function setBoardSize(size: number): void {
   safeSet(local, BOARD_SIZE_KEY, String(size));
+}
+export function getBoardArrowSize(): number | null {
+  const raw = safeGet(local, BOARD_ARROW_SIZE_KEY);
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+export function setBoardArrowSize(size: number): void {
+  safeSet(local, BOARD_ARROW_SIZE_KEY, String(size));
+}
+
+/**
+ * Дефолтные радиусы гранат по типу (доля ширины доски) — «для себя», чтобы не
+ * настраивать заново каждый вход. Карта kind→radius; читатель сам мерджит её
+ * поверх своих дефолтов и санирует значения, поэтому тут отдаём сырой объект.
+ */
+export function getBoardObjRadii(): Record<string, number> {
+  return readMap<number>(BOARD_OBJ_RADII_KEY);
+}
+export function setBoardObjRadii(radii: Record<string, number>): void {
+  writeMap(BOARD_OBJ_RADII_KEY, radii);
+}
+
+/**
+ * Цвета команд (CT/T) — локальная косметика «для себя», в сетевой протокол не
+ * уходят. Карта team→hex; читатель мерджит поверх дефолтных TEAM_COLORS и
+ * санирует hex, поэтому тут — сырой объект.
+ */
+export function getTeamColors(): Record<string, string> {
+  return readMap<string>(BOARD_TEAM_COLORS_KEY);
+}
+export function setTeamColors(colors: Record<string, string>): void {
+  writeMap(BOARD_TEAM_COLORS_KEY, colors);
 }
 
 /**
